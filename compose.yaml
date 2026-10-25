@@ -1,0 +1,60 @@
+name: whale-stack
+services:
+  snowluma:
+    image: ${SNOWLUMA_IMAGE}
+    container_name: snowluma-whale
+    restart: unless-stopped
+    shm_size: 1gb
+    mem_limit: 1400m
+    memswap_limit: 2400m
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    environment:
+      TZ: Asia/Shanghai
+      SNOWLUMA_WEBUI_HOST: 0.0.0.0
+      SNOWLUMA_WEBUI_PORT: 5099
+      SNOWLUMA_SCREEN: 1280x720x24
+      SNOWLUMA_QQ_FLAGS: --disable-gpu --disable-software-rasterizer --disable-gpu-compositing
+    ports:
+      - 127.0.0.1:6081:6081
+      - 127.0.0.1:5099:5099
+    volumes:
+      - ./gateway-data:/app/data
+      - ./qq-config:/app/.config
+      - ./qq-data:/app/.local/share
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  whale-bot:
+    image: whale-bot:cloud-20261025
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE}
+    container_name: whale-bot
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    memswap_limit: 512m
+    environment:
+      TZ: Asia/Shanghai
+      NODE_OPTIONS: --max-old-space-size=160
+    volumes:
+      - ./app/config.json:/app/app/config.json:ro
+      - ./app/role.md:/app/app/role.md:ro
+      - ./app/data:/app/app/data
+    depends_on:
+      - snowluma
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!app/
+!app/src/
+!app/src/**

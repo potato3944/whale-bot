@@ -1,0 +1,19 @@
+{
+  "name": "whale-bot",
+  "version": "1.0.0",
+  "description": "住在 QQ 里的 AI 小鲸鱼 · companion 独立版",
+  "type": "module",
+  "scripts": {
+    "start": "node app/src/index.js --config ./app/config.json",
+    "check": "node app/src/index.js --check --config ./app/config.json",
+    "dry": "node app/src/index.js --dry-run --config ./app/config.json",
+    "selftest": "node mock/mock-stack.mjs",
+    "diary": "node app/src/diary.js",
+    "diary:auto": "node app/src/diary.js auto"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

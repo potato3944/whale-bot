@@ -1,0 +1,65 @@
+{
+  "//": "本地 mock 专用配置：指向 mock-stack 起的三端口，不碰真 NapCat",
+  "provider": "custom",
+  "apiKey": "",
+  "baseUrl": "http://127.0.0.1:11435/v1",
+  "model": "mock-whale",
+  "roleCard": "role.example.md",
+  "roleMaxChars": 12000,
+  "names": [
+    "小鲸鱼",
+    "鲸鱼"
+  ],
+  "keywords": [
+    "小鲸鱼"
+  ],
+  "ownerIds": [
+    "10001"
+  ],
+  "onebot": {
+    "wsUrl": "ws://127.0.0.1:13001",
+    "httpUrl": "http://127.0.0.1:13000",
+    "accessToken": "mock-only-token-not-for-production"
+  },
+  "wake": {
+    "groupAtOnly": true,
+    "probability": 0.05,
+    "privateWindowMs": 1500,
+    "groupWindowMs": 6000
+  },
+  "humanize": {
+    "enabled": true,
+    "msPerChar": 85,
+    "minMs": 1200,
+    "maxMs": 6000,
+    "jitter": 0.2,
+    "burstMax": 4,
+    "gapRange": [
+      700,
+      2600
+    ],
+    "longGapChance": 0.25,
+    "longGapRange": [
+      3000,
+      9000
+    ]
+  },
+  "guard": {
+    "maxSendPerMinute": 6,
+    "maxSendPerHour": 80,
+    "failThreshold": 3,
+    "openMs": 180000,
+    "typing": {
+      "enabled": true,
+      "minCharsForTyping": 20,
+      "minIntervalMs": 45000,
+      "probability": 0.35
+    }
+  },
+  "dataDir": "data-mock",
+  "diaryDir": "data-mock/diary",
+  "diaryMaxChars": 2000,
+  "proactive": {
+    "enabled": false
+  }
+}
