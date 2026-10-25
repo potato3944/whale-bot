@@ -46,6 +46,8 @@ cp app/config.example.json app/config.json
 cp app/role.example.md app/role.md
 mkdir -p app/data gateway-data/config qq-config qq-data
 sudo chown -R 1000:1000 app/data
+sudo chown 1000:1000 app/config.json
+chmod 600 app/config.json
 ```
 
 在 `app/config.json` 中填写模型配置，将 `onebot.httpUrl` 设为 `http://snowluma:3000`，`onebot.wsUrl` 设为 `ws://snowluma:3001`。按 [SnowLuma 配置文档](https://snowluma.github.io/zh/docs/guide/configuration)准备 `gateway-data/config/onebot.json`：HTTP 3000 与 WebSocket 3001、消息格式 `array`，两者令牌均与机器人配置一致。
