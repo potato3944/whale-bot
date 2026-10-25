@@ -23,6 +23,8 @@ cp app/role.example.md app/role.md
 
 编辑 `app/config.json`，填写模型地址、模型名称、API Key、自己的 QQ 号和 OneBot 地址及令牌。
 
+希望采用 qq-bridge 作者的小鲸鱼人格时，可用 `cp app/role.qqbridge.md app/role.md` 替换示例角色卡。这份改编保留上游人格与语气，移除了当前程序不支持的搜索和自主等待操作；没有加入管理员绝对服从、固定黏人或吃醋设定。来源和原始 MIT 声明见 `THIRD_PARTY_NOTICES.md`。
+
 ```sh
 npm run check
 npm start
