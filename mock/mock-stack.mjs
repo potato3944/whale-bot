@@ -15,6 +15,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import { WebSocketServer } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -116,6 +118,13 @@ function injectPrivateMessage(sock) {
   };
   log('→ 注入私聊消息：「在吗」');
   sock.send(JSON.stringify(evt));
+  // 同一群先有未触发唤醒的闲聊，再有人 @；前一条也应进入模型上下文。
+  sock.send(JSON.stringify({ ...evt, message_type: 'group', group_id: 700,
+    user_id: 10002, sender: { user_id: 10002, nickname: '群友' }, message_id: 2001,
+    message: [{ type: 'text', data: { text: '群里刚约好周末吃火锅' } }] }));
+  sock.send(JSON.stringify({ ...evt, message_type: 'group', group_id: 700,
+    user_id: 10002, sender: { user_id: 10002, nickname: '群友' }, message_id: 2002,
+    message: [{ type: 'at', data: { qq: SELF_ID } }, { type: 'text', data: { text: '你觉得这个安排怎么样' } }] }));
 }
 
 // ── ③ 假模型（OpenAI 兼容）───────────────────────────────────
@@ -131,7 +140,7 @@ const llmServer = http.createServer((req, res) => {
     try { payload = JSON.parse(body); } catch { /* ignore */ }
     state.llmCalls.push(payload);
 
-    const sys = payload.messages?.find((m) => m.role === 'system')?.content || '';
+    const sys = payload.messages?.find((m) => ['system', 'developer'].includes(m.role))?.content || '';
     const hasRoleCard = sys.includes('小鲸鱼');
     log('← LLM 调用 #' + state.llmCalls.length,
         'messages=' + (payload.messages?.length || 0),
@@ -154,6 +163,28 @@ const llmServer = http.createServer((req, res) => {
       content = '在呢\n说';
     }
 
+    if (payload.stream) {
+      let delta = { role: 'assistant', content };
+      let finishReason = 'stop';
+      if (payload.tools?.some(t => t.function.name === 'qq_send_message')) {
+        const last = payload.messages.at(-1);
+        const invoke = (id, name, args) => {
+          delta = { role: 'assistant', tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
+          finishReason = 'tool_calls';
+        };
+        if (last.role !== 'tool') invoke('mock-read', 'qq_get_unread_messages', { afterSeq: 0 });
+        else if (last.tool_call_id === 'mock-read') invoke('mock-send', 'qq_send_message', { messages: ['在呢', '说'] });
+        else if (last.tool_call_id === 'mock-send') {
+          const read = [...payload.messages].reverse().find(m => m.role === 'tool' && m.tool_call_id === 'mock-read');
+          invoke('mock-mark', 'qq_mark_read', { throughSeq: JSON.parse(read.content).readThroughSeq });
+        } else delta = { role: 'assistant', content: '这段是内部输出，不应转发到QQ' };
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: ' + JSON.stringify({ id: 'mock-stream', choices: [{ index: 0, delta, finish_reason: null }] }) + '\n\n');
+      res.write('data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 } }) + '\n\n');
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       id: 'mock-' + Date.now(),
@@ -177,14 +208,24 @@ function listen(server, port, name) {
 let child = null;
 
 function verdict() {
+  const acknowledged = ['private-10001', 'group-700'].every(key => {
+    try { return JSON.parse(fs.readFileSync(path.join(state.dataDir, 'conversations', key + '.json'), 'utf8')).readThroughSeq > 0; }
+    catch { return false; }
+  });
   const checks = [
     ['bot 连上 OneBot WS', state.botConnected],
     ['收到 lifecycle 事件', state.lifecycleSeen],
     ['模型被调用', state.llmCalls.length > 0],
     ['角色卡注入 system prompt', state.llmCalls.some((c) =>
-      c.messages?.some((m) => m.role === 'system' && String(m.content).includes('小鱼')))],
+      c.messages?.some((m) => ['system', 'developer'].includes(m.role) && String(m.content).includes('小鱼')))],
     ['bot 发出至少一条消息', state.sentMessages.length > 0],
     ['消息带 Bearer 鉴权通过', state.sentMessages.length > 0],
+    ['未唤醒的群聊内容进入后续上下文', state.llmCalls.some(c =>
+      c.messages?.some(m => JSON.stringify(m.content).includes('群里刚约好周末吃火锅')))],
+    ['群聊实际发出回复', state.sentMessages.some(m => m.action === 'send_group_msg')],
+    ['内部输出未转发且工具消息不重复', state.sentMessages.length === 4 && state.sentMessages.every(m => ['在呢', '说'].includes(m.message))],
+    ['模型实际执行已读工具', acknowledged],
+    ['显式收尾后省去额外模型请求', state.llmCalls.length === 6],
   ];
   let pass = true;
   console.log('\n════════ 端到端结果 ════════');
@@ -207,8 +248,19 @@ async function main() {
   await listen(wsHttp, PORT_WS, 'OneBot WS');
 
   if (!noSpawn) {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-e2e-'));
+    const cfg = JSON.parse(fs.readFileSync(path.join(APP, 'config.mock.json'), 'utf8'));
+    cfg.roleCard = path.join(APP, cfg.roleCard);
+    cfg.dataDir = path.join(testDir, 'data');
+    state.dataDir = cfg.dataDir;
+    cfg.engine = 'pi';
+    cfg.humanize = { enabled: false };
+    cfg.wake.privateWindowMs = cfg.wake.groupWindowMs = 20;
+    const configFile = path.join(testDir, 'config.json');
+    fs.writeFileSync(configFile, JSON.stringify(cfg));
+    process.on('exit', () => fs.rmSync(testDir, { recursive: true, force: true }));
     log('拉起 companion 子进程…');
-    child = spawn(process.execPath, ['src/index.js', '--config', './config.mock.json'], {
+    child = spawn(process.execPath, ['src/index.js', '--config', configFile], {
       cwd: APP,
       stdio: ['ignore', 'inherit', 'inherit'],
       env: { ...process.env },

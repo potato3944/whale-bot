@@ -34,7 +34,7 @@ services:
         max-size: 10m
         max-file: "3"
   whale-bot:
-    image: whale-bot:cloud-20261025
+    image: whale-bot:pi-20261026
     build:
       context: .
       args:
@@ -42,11 +42,11 @@ services:
     container_name: whale-bot
     restart: unless-stopped
     init: true
-    mem_limit: 256m
-    memswap_limit: 512m
+    mem_limit: 512m
+    memswap_limit: 768m
     environment:
       TZ: Asia/Shanghai
-      NODE_OPTIONS: --max-old-space-size=160
+      NODE_OPTIONS: --max-old-space-size=320
     volumes:
       - ./app/config.json:/app/app/config.json:ro
       - ./app/role.md:/app/app/role.md:ro

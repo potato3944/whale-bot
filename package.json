@@ -8,12 +8,17 @@
     "check": "node app/src/index.js --check --config ./app/config.json",
     "dry": "node app/src/index.js --dry-run --config ./app/config.json",
     "selftest": "node mock/mock-stack.mjs",
+    "test": "node --test test/*.test.mjs",
     "diary": "node app/src/diary.js",
     "diary:auto": "node app/src/diary.js auto"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "typebox": "1.3.27",
     "ws": "^8.18.0"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT"
 }

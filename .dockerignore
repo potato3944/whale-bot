@@ -5,3 +5,4 @@
 !app/
 !app/src/
 !app/src/**
+!app/role.private.md

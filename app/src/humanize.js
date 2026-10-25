@@ -107,7 +107,7 @@ export class Humanizer {
    * @param {string|string[]} text        要说的话（字符串会被自动切分）
    * @param {object} io
    * @param {(on:boolean)=>Promise<void>} [io.setTyping]  切换"正在输入"状态
-   * @param {(msg:string)=>Promise<any>}  io.send          真正发一条
+   * @param {(msg:string)=>Promise<any>}  io.send          真正发一条；返回false表示未发出并停止后续分条
    * @param {(ms:number)=>Promise<void>}  [io.sleep]       等待（默认 setTimeout，测试时可注入）
    * @returns {Promise<{sent:number, parts:string[]}>}
    */
@@ -117,8 +117,9 @@ export class Humanizer {
     if (!parts.length) return { sent: 0, parts: [] };
 
     if (!this.enabled) {
-      for (const p of parts) await send(p);
-      return { sent: parts.length, parts };
+      let sent = 0;
+      for (const p of parts) { if (await send(p) === false) break; sent++; }
+      return { sent, parts };
     }
 
     let sent = 0;
@@ -129,7 +130,7 @@ export class Humanizer {
       await wait(this.typingMsFor(p));
       if (setTyping) { try { await setTyping(false); } catch {} }
       // 2) 发出去
-      await send(p);
+      if (await send(p) === false) break;
       sent++;
       // 3) 条间停顿
       if (i < parts.length - 1) await wait(this.gapMs());

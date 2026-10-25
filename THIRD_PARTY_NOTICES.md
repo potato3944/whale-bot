@@ -1,9 +1,26 @@
 # Third-party notices
 
-## qq-bridge role card
+## qq-bridge role card and QQ tool protocol
 
 `app/role.qqbridge.md` is adapted from `roles/小鲸鱼.md` in
 https://github.com/Derpyu520/qq-bridge at commit `a49877f4e58d04e47532d44b803360d0f001160d`.
+`app/role.private.md` is a locally rewritten gentle private-chat persona that
+retains the whale identity from that card; its tone, private-chat rules and
+examples are newly written for this project.
+
+`app/src/qq-read-receipts.js` adapts `readThroughSeqV2` and
+`requestedReadThroughSeqV2` from `src/bridge.js` at the same commit.
+`app/src/qq-tools.js` reuses tool names, parameter semantics, selected descriptions
+and JSON message normalization from `src/mcp-snowluma-safe.js`.
+`app/src/transport-onebot.js` adapts `escapeCqText` from `src/bridge.js`
+to neutralize literal CQ control codes in plain text.
+`app/src/qq-tool-guide.js` adapts the QQ tool protocol from the `qq-chat-v2` preset.
+`app/src/social-memory-format.js` adapts `formatMemoryV2` from `src/bridge.js`;
+the social-memory categories and 24-hour topic / 2-hour pending-thought defaults
+also follow that implementation. Session-bound JSON storage, fact/event entries,
+source validation, ID-based updates and bounded revisions are local adaptations.
+HTTP/MCP wrappers are replaced by session-bound in-process Pi tools. Cursorless
+acknowledgement compatibility and long-poll waiting are deliberately omitted.
 
 The personality and examples are retained. Search, webpage reading and
 agent-controlled waiting instructions are adapted to the capabilities

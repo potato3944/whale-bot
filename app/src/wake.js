@@ -159,7 +159,7 @@ export class Waker {
     const b = this.buffers.get(key);
     if (!b) return [];
     const items = b.items;
-    b.items = [];
+    this.buffers.delete(key);
     return items;
   }
 

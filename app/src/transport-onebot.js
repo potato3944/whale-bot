@@ -101,6 +101,7 @@ export class OneBot {
     const atMe = Array.isArray(segs) && segs.some((s) => s?.type === 'at' && String(s.data?.qq) === this.selfId);
     // 少数实现的私聊不带顶层 user_id，退回 sender
     const userId = String(ev.user_id ?? ev.sender?.user_id ?? '');
+    if (userId === this.selfId) return; // 某些网关会把自己的发送作为 message 回推。
 
     const msg = {
       key: isGroup ? 'group:' + ev.group_id : 'private:' + userId,
@@ -133,8 +134,11 @@ export class OneBot {
         signal: AbortSignal.timeout(30000),
       });
       const t = await r.text();
-      let j; try { j = JSON.parse(t); } catch { j = { raw: t }; }
-      return { ok: r.ok && j.status !== 'failed', data: j, error: j.message || j.wording };
+      let j; try { j = JSON.parse(t); } catch { return { ok: false, error: 'OneBot返回的不是JSON' }; }
+      const ok = r.ok && j && !Array.isArray(j) &&
+        (j.retcode === 0 || (j.retcode === undefined && j.status === 'ok')) &&
+        (j.status === undefined || j.status === 'ok');
+      return { ok: Boolean(ok), data: j, error: j?.message || j?.wording || (ok ? undefined : 'OneBot未确认操作成功') };
     } catch (e) {
       return { ok: false, error: String(e.message || e) };
     }
@@ -144,7 +148,10 @@ export class OneBot {
   send(key, text, { atUserId } = {}) {
     const isGroup = key.startsWith('group:');
     const id = key.split(':')[1];
-    let message = String(text);
+    // Adapted from qq-bridge escapeCqText, MIT (see THIRD_PARTY_NOTICES.md).
+    // 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。
+    let message = String(text ?? '').replace(/\[CQ:/gi, '[CQ：');
+    if (atUserId && !/^\d+$/.test(String(atUserId))) throw new Error('无效的 @ QQ 号');
     if (atUserId) message = '[CQ:at,qq=' + atUserId + '] ' + message;
     return isGroup
       ? this.api('send_group_msg', { group_id: id, message })

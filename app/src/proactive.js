@@ -44,12 +44,13 @@ export class Proactive {
    * @param {object} [opts.cfg]      config.proactive
    * @param {(s:string)=>void} [opts.log]
    */
-  constructor({ brain, memory, bot, guard, human, ownerId, cfg = {}, log = console.log }) {
+  constructor({ brain, memory, bot, guard, human, conversations, ownerId, cfg = {}, log = console.log }) {
     this.brain = brain;
     this.memory = memory;
     this.bot = bot;
     this.guard = guard;
     this.human = human;
+    this.conversations = conversations;
     this.ownerId = String(ownerId || '');
     this.enabled = cfg.enabled !== false;
     this.checkMin = Math.max(5, Number(cfg.checkMin) || 15);
@@ -121,25 +122,34 @@ export class Proactive {
     if (!out) { this.log('   [主动] 想说话但憋回去了'); return { sent: 0, text: '' }; }
 
     const wantTyping = this.guard.shouldType(out);
+    const sentParts = [];
     const r = await this.human.say(out, {
       setTyping: (on) => (wantTyping ? this.bot.setTyping(key, on) : undefined),
       send: async (m) => {
         const gate = this.guard.allow();
-        if (!gate.ok) { this.log('   [主动·限速] ' + gate.reason + '，这条没发出去'); return; }
+        if (!gate.ok) { this.log('   [主动·限速] ' + gate.reason + '，这条没发出去'); return false; }
         const res = await this.bot.send(key, m);
-        if (res && res.ok === false) { this.guard.fail(); this.log('   [主动·失败] ' + (res.error || '未知错误')); }
-        else this.guard.ok();
+        if (res?.ok !== true) { this.guard.fail(); this.log('   [主动·失败] ' + (res?.error || '未知错误')); return false; }
+        else {
+          this.guard.ok();
+          this.conversations?.append({ key: 'private:' + this.ownerId, isSelf: true,
+            userId: this.bot.selfId, name: '自己', text: m });
+          sentParts.push(m);
+          return true;
+        }
       },
     });
+
+    if (!r.sent) return { sent: 0, text: '' };
 
     const s = this.#state();
     s.count += 1;
     s.lastAt = Date.now();
     this.#saveState(s);
-    this.memory.logTurn({ where: key, who: name, text: '', reply: out });
+    this.memory.logTurn({ where: key, who: name, text: '', reply: sentParts.join('\n') });
     this.log('   [主动] ' + when + ' 找 ' + name + ' 说了 ' + r.sent + ' 条（今日 ' + s.count + '/' + this.maxPerDay + '）：'
-      + r.parts.map((p) => p.slice(0, 18)).join(' | '));
-    return { sent: r.sent, text: out };
+      + sentParts.map((p) => p.slice(0, 18)).join(' | '));
+    return { sent: r.sent, text: sentParts.join('\n') };
   }
 
   /** 挂定时器：每 checkMin 分钟醒一次 */
@@ -147,7 +157,7 @@ export class Proactive {
     if (!this.enabled) { this.log('   [主动] 未启用（proactive.enabled=false）'); return; }
     if (this.timer) return;
     this.log('   [主动] 定时器已挂：每 ' + this.checkMin + ' 分钟掷一次骰子，每天最多 ' + this.maxPerDay
-      + ' 条，' + this.quietStart + '~' + this.quietEnd + ' 点休眠，静默 ' + this.minSilenceMin + ' 分钟以上才会开口');
+      + ' 次主动搭话，' + this.quietStart + '~' + this.quietEnd + ' 点休眠，静默 ' + this.minSilenceMin + ' 分钟以上才会开口');
     this.timer = setInterval(() => this.tick(), this.checkMin * 60000);
     setTimeout(() => this.tick(), 5 * 60000);   // 起搏：挂上 5 分钟后先看一眼
   }

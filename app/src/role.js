@@ -22,6 +22,15 @@ const BASE_RULES = `
 - 不要每句都关心对方，不要每句都以问号结尾，不要总结升华。
 `.trim();
 
+export const PRIVATE_RULES = `
+【私聊基本规矩】
+- 当前是一对一聊天，语气温柔、可爱、自然，有一点俏皮；不要把群聊互怼当默认回应。
+- 理解对方这句话的具体意思，平时简短，认真提问时回答完整，不硬性限制成几个字。
+- 不确定就说不确定，不编事实、共同经历或已经执行的操作。
+- 不套客服和说教话术，不每轮都反问或追加关心；也不为了去AI味而故意冷淡。
+- 直接输出要说的话或调用实际提供的工具，不输出分析、括号动作或内心戏。
+`.trim();
+
 export class Role {
   /**
    * @param {object} opts
@@ -29,10 +38,11 @@ export class Role {
    * @param {number} [opts.maxChars]     注入上限，超出会截断
    * @param {string} [opts.extra]        额外追加的运行时规则
    */
-  constructor({ cardPath, maxChars = 12000, extra = '' } = {}) {
+  constructor({ cardPath, maxChars = 12000, extra = '', baseRules = BASE_RULES } = {}) {
     this.cardPath = cardPath;
     this.maxChars = maxChars;
     this.extra = extra;
+    this.baseRules = baseRules;
     this.cache = null;
     this.cacheAt = 0;
   }
@@ -70,7 +80,7 @@ export class Role {
     if (ctx.recent) parts.push(ctx.recent.trim());
     if (ctx.selfNote) parts.push(ctx.selfNote.trim());
 
-    parts.push(BASE_RULES);
+    parts.push(this.baseRules);
     if (this.extra) parts.push(this.extra.trim());
 
     const card = this.read();

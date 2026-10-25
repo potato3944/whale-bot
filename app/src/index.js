@@ -19,13 +19,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Memory } from './memory.js';
-import { Role } from './role.js';
+import { Role, PRIVATE_RULES } from './role.js';
 import { Brain } from './brain.js';
 import { Humanizer } from './humanize.js';
 import { Waker } from './wake.js';
 import { OneBot } from './transport-onebot.js';
 import { Guard } from './guard.js';
 import { Proactive } from './proactive.js';
+import { ConversationState, SerialQueue } from './conversation-state.js';
+import { SocialMemory } from './social-memory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,8 +55,12 @@ export function loadConfig(explicitPath) {
     apiKey: cfg.apiKey || process.env.DEEPSEEK_API_KEY || preset.apiKey || '',
     baseUrl: cfg.baseUrl || preset.baseUrl || 'https://api.deepseek.com/v1',
     model: cfg.model || preset.model || 'deepseek-chat',
+    engine: cfg.engine || 'pi',
+    pi: cfg.pi || {},
+    socialMemory: cfg.socialMemory !== false,
 
     roleCard: rel(cfg.roleCard, 'role.md'),
+    privateRoleCard: cfg.privateRoleCard ? rel(cfg.privateRoleCard) : path.join(__dirname, '..', 'role.private.md'),
     roleMaxChars: cfg.roleMaxChars || 12000,
     dataDir: rel(cfg.dataDir, 'data'),
 
@@ -89,7 +95,9 @@ async function main() {
 
   console.log('════════ companion ════════');
   console.log('  后端      ' + cfg.provider + ' · ' + cfg.model + ' @ ' + cfg.baseUrl);
+  console.log('  会话引擎  ' + cfg.engine);
   console.log('  角色卡    ' + cfg.roleCard);
+  console.log('  私聊卡    ' + cfg.privateRoleCard);
   console.log('  数据目录  ' + cfg.dataDir);
   console.log('  OneBot    ' + cfg.onebot.wsUrl);
   console.log('  名字      ' + (cfg.names.join(' / ') || '（没配）'));
@@ -99,6 +107,7 @@ async function main() {
 
   const memory = new Memory({ dir: cfg.dataDir });
   const role = new Role({ cardPath: cfg.roleCard, maxChars: cfg.roleMaxChars });
+  const privateRole = new Role({ cardPath: cfg.privateRoleCard, maxChars: cfg.roleMaxChars, baseRules: PRIVATE_RULES });
 
   // 角色卡体检
   const lint = role.lint();
@@ -107,12 +116,19 @@ async function main() {
     lint.warn.forEach((w) => console.log('   · ' + w));
     console.log('');
   }
+  if (!privateRole.read()) throw new Error('私聊角色卡读不到：' + cfg.privateRoleCard);
+  const privateLint = privateRole.lint();
+  if (!privateLint.ok) privateLint.warn.forEach(w => console.log('⚠️ 私聊角色卡：' + w));
   if (process.argv.includes('--check')) { console.log('检查完毕。'); return; }
   // 本地端点（ollama / mock）不需要 key，远程的缺 key 就一定会失败
   const localBrain = /127\.0\.0\.1|localhost/.test(cfg.baseUrl);
   if (!cfg.apiKey && !localBrain) console.log('⚠️ 没配 apiKey，模型调用会失败\n');
 
-  const brain = new Brain({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model: cfg.model, role, memory });
+  if (!['pi', 'legacy'].includes(cfg.engine)) throw new Error('engine 必须为 pi 或 legacy');
+  const brain = new Brain({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model: cfg.model, role, privateRole, memory, engine: cfg.engine, pi: cfg.pi });
+  const conversations = new ConversationState({ dir: path.join(cfg.dataDir, 'conversations') });
+  const socialMemory = cfg.socialMemory ? new SocialMemory({ dir: path.join(cfg.dataDir, 'social-memory') }) : undefined;
+  const turns = new SerialQueue();
   const human = new Humanizer(cfg.humanize);
   const guard = new Guard(cfg.guard);
   const waker = new Waker({
@@ -138,6 +154,13 @@ async function main() {
       }
     },
     onMessage: (msg) => {
+      // 先保留聊天现场，再判定唤醒；重复推送不重复回应。
+      try {
+        const entry = conversations.append(msg);
+        if (!entry) return;
+        msg.conversationSeq = entry.seq;
+      }
+      catch (e) { console.error('[消息缓存失败] ' + e.message); return; }
       // 第一次见到这个会话 → 给个默认策略
       if (!waker.configs.has(msg.key)) {
         waker.setConfig(msg.key, msg.isGroup
@@ -163,18 +186,21 @@ async function main() {
       // 合并窗口：等人把话说完
       const win = msg.isGroup ? cfg.wake.groupWindowMs : cfg.wake.privateWindowMs;
       clearTimeout(pending.get(msg.key));
-      waker.batch(msg);
+      const batch = waker.batch(msg);
+      const dispatch = (items) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory }, items, cfg))
+        .catch((e) => console.error('[出错] ' + (e?.message || e)));
+      if (batch.ready) { pending.delete(msg.key); void dispatch(batch.batch); return; }
       pending.set(msg.key, setTimeout(() => {
+        pending.delete(msg.key);
         const items = waker.flush(msg.key);
         if (!items.length) return;
-        handleTurn({ bot, brain, human, memory, waker, guard }, items, cfg)
-          .catch((e) => console.error('[出错] ' + (e?.message || e)));
+        void dispatch(items);
       }, win));
     },
   });
 
   const proactive = new Proactive({
-    brain, memory, bot, guard, human,
+    brain, memory, bot, guard, human, conversations,
     ownerId: cfg.ownerIds[0],
     cfg: cfg.proactive,
   });
@@ -187,9 +213,14 @@ async function main() {
 }
 
 /** 处理一轮（可能是合并后的多条） */
-export async function handleTurn({ bot, brain, human, memory, waker, guard }, items, cfg) {
+export async function handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory }, items, cfg) {
   const last = items[items.length - 1];
   const key = last.key;
+  if (cfg.engine === 'pi' && last.conversationSeq !== undefined &&
+      last.conversationSeq <= conversations?.read(key).readThroughSeq) {
+    console.log('   （触发消息已由前一轮工具处理，跳过重复回合）');
+    return;
+  }
   const text = Waker.joinBatch(items);
   const images = items.flatMap((i) => i.images || []).slice(0, 3);   // 一批最多喂 3 张，防炸请求体
 
@@ -197,7 +228,19 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard }, it
     ? '你在一个 QQ 群里。下面是群里刚连着说的几句话，最后一条是最新的。'
     : '你在跟 ' + last.name + ' 私聊。';
 
-  const { text: out } = await brain.reply({ key, userId: last.userId, userName: last.name, text, situation, images });
+  const snapshot = conversations?.snapshot(key, { throughSeq: last.conversationSeq ?? Infinity });
+  let qq;
+  if (cfg.engine === 'pi' && conversations) {
+    const { createQQTools } = await import('./qq-tools.js');
+    qq = createQQTools({ key, store: conversations, snapshot, bot, human, guard, dryRun: cfg.dryRun, socialMemory,
+      actor: { userId: last.userId, name: last.name, seq: last.conversationSeq } });
+  }
+  const { text: out } = await brain.reply({ key, userId: last.userId, userName: last.name, text, situation, images, snapshot, qq });
+  if (qq) {
+    console.log(cfg.dryRun ? '   [干跑] 计划发送 ' + qq.plannedMessages.length + ' 条' : '   工具实际发出 ' + qq.sentMessages.length + ' 条；已读确认=' + qq.closed);
+    if (qq.sentMessages.length) { waker.wake(key); memory.touch(last.userId, { name: last.name }); }
+    return; // 普通 assistant 文本不再自动转发，也不自动确认已读。
+  }
   if (!out) { console.log('   （没说话）'); return; }
 
   if (cfg.dryRun) { console.log('   [干跑] 会说：' + out); return; }
@@ -205,21 +248,27 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard }, it
   // 输入态要不要报：由风控层决定真人感，避免一分钟报上百次
   const wantTyping = guard.shouldType(out);
 
+  let delivered = true;
   const r = await human.say(out, {
     setTyping: (on) => (wantTyping ? bot.setTyping(key, on) : undefined),
     send: async (m) => {
       const gate = guard.allow();
-      if (!gate.ok) { console.log('   [限速] ' + gate.reason + '，这条没发出去'); return; }
+      if (!gate.ok) { delivered = false; console.log('   [限速] ' + gate.reason + '，这条没发出去'); return false; }
       const res = await bot.send(key, m);
-      if (res && res.ok === false) {
+      if (res?.ok !== true) {
+        delivered = false;
         guard.fail();
-        console.log('   [发送失败] ' + (res.error || '未知错误'));
+        console.log('   [发送失败] ' + (res?.error || '未知错误'));
+        return false;
       } else {
         guard.ok();
+        conversations?.append({ key, isSelf: true, text: m, userId: bot.selfId, name: '自己' });
+        return true;
       }
     },
   });
-  console.log('   发出 ' + r.sent + ' 条：' + r.parts.map((p) => p.slice(0, 18)).join(' | '));
+  if (delivered && snapshot) conversations.markRead(key, snapshot.throughSeq);
+  console.log('   发出 ' + r.sent + ' 条：' + r.parts.slice(0, r.sent).map((p) => p.slice(0, 18)).join(' | '));
   waker.wake(key);
   memory.touch(last.userId, { name: last.name });
 }
