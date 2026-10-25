@@ -130,15 +130,9 @@ async function main() {
     ...cfg.onebot,
     onRequest: (ev) => {
       if (ev.request_type === 'friend') {
-        console.log('[申请] 好友申请来自 ' + ev.user_id + '，自动同意');
-        bot.api('set_friend_add_request', { flag: ev.flag, approve: true }).then((r) => {
-          console.log('   ' + (r.ok ? '已同意' : '同意失败：' + (r.error || '')));
-        });
+        console.log('[申请] 好友申请来自 ' + ev.user_id + '，等待管理员在 QQ 手动处理');
       } else if (ev.request_type === 'group' && ev.sub_type === 'invite') {
-        console.log('[申请] 群邀请（群 ' + ev.group_id + ' 邀请人 ' + ev.user_id + '），自动同意');
-        bot.api('set_group_add_request', { flag: ev.flag, sub_type: 'invite', approve: true }).then((r) => {
-          console.log('   ' + (r.ok ? '已同意' : '同意失败：' + (r.error || '')));
-        });
+        console.log('[申请] 群邀请（群 ' + ev.group_id + ' 邀请人 ' + ev.user_id + '），等待管理员在 QQ 手动处理');
       } else {
         console.log('[申请] ' + (ev.request_type || '') + ' 来自 ' + ev.user_id + '（没处理）');
       }
