@@ -13,7 +13,7 @@
   "pi": {
     "contextWindow": 131072,
     "maxTokens": 4096,
-    "thinkingLevel": "high",
+    "thinkingLevel": "off",
     "thinkingFormat": "deepseek"
   },
   "// 2": "=== 角色 ===",
