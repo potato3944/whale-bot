@@ -23,11 +23,13 @@ import { Role, PRIVATE_RULES } from './role.js';
 import { Brain } from './brain.js';
 import { Humanizer } from './humanize.js';
 import { Waker } from './wake.js';
+import { GroupWindow } from './group-window.js';
 import { OneBot } from './transport-onebot.js';
 import { Guard } from './guard.js';
 import { Proactive } from './proactive.js';
 import { ConversationState, SerialQueue } from './conversation-state.js';
 import { SocialMemory } from './social-memory.js';
+import { RelationshipMemory } from './relationship-memory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,7 +59,9 @@ export function loadConfig(explicitPath) {
     model: cfg.model || preset.model || 'deepseek-chat',
     engine: cfg.engine || 'pi',
     pi: cfg.pi || {},
+    web: cfg.web || {},
     socialMemory: cfg.socialMemory !== false,
+    globalRelationships: cfg.globalRelationships !== false,
 
     roleCard: rel(cfg.roleCard, 'role.md'),
     privateRoleCard: cfg.privateRoleCard ? rel(cfg.privateRoleCard) : path.join(__dirname, '..', 'role.private.md'),
@@ -73,12 +77,15 @@ export function loadConfig(explicitPath) {
     names: cfg.names || [],
     keywords: cfg.keywords || [],
     ownerIds: (cfg.ownerIds || []).map(String),
+    ownerNames: cfg.ownerNames || {},
 
     wake: {
       probability: cfg.wake?.probability ?? 0.05,
       groupAtOnly: cfg.wake?.groupAtOnly !== false,
       privateWindowMs: cfg.wake?.privateWindowMs ?? 1500,
       groupWindowMs: cfg.wake?.groupWindowMs ?? 6000,
+      groupExtensionMs: cfg.wake?.groupExtensionMs ?? 1000,
+      groupMaxWindowMs: cfg.wake?.groupMaxWindowMs ?? 10000,
     },
 
     humanize: cfg.humanize || {},
@@ -125,7 +132,8 @@ async function main() {
   if (!cfg.apiKey && !localBrain) console.log('⚠️ 没配 apiKey，模型调用会失败\n');
 
   if (!['pi', 'legacy'].includes(cfg.engine)) throw new Error('engine 必须为 pi 或 legacy');
-  const brain = new Brain({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model: cfg.model, role, privateRole, memory, engine: cfg.engine, pi: cfg.pi });
+  const relationships = cfg.globalRelationships ? new RelationshipMemory({ dir: cfg.dataDir, ownerIds: cfg.ownerIds, ownerNames: cfg.ownerNames }) : undefined;
+  const brain = new Brain({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, model: cfg.model, role, privateRole, memory, engine: cfg.engine, pi: cfg.pi, web: cfg.web, ownerIds: cfg.ownerIds, ownerNames: cfg.ownerNames, relationships });
   const conversations = new ConversationState({ dir: path.join(cfg.dataDir, 'conversations') });
   const socialMemory = cfg.socialMemory ? new SocialMemory({ dir: path.join(cfg.dataDir, 'social-memory') }) : undefined;
   const turns = new SerialQueue();
@@ -141,6 +149,14 @@ async function main() {
 
   /** @type {Map<string, NodeJS.Timeout>} 每个会话的合并定时器 */
   const pending = new Map();
+  const dispatch = (items) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg))
+    .catch((e) => console.error('[出错] ' + (e?.message || e)));
+  const groupWindow = new GroupWindow({
+    initialMs: cfg.wake.groupWindowMs,
+    extensionMs: cfg.wake.groupExtensionMs,
+    maxMs: cfg.wake.groupMaxWindowMs,
+    dispatch,
+  });
 
   const bot = new OneBot({
     ...cfg.onebot,
@@ -167,16 +183,22 @@ async function main() {
           ? {
               mode: 'diving',
               atMention: true,
-              nameMention: !cfg.wake.groupAtOnly,
-              question: !cfg.wake.groupAtOnly,
-              poke: true,
-              probability: cfg.wake.groupAtOnly ? 0 : cfg.wake.probability,
+              nameMention: false,
+              question: false,
+              poke: false,
+              probability: 0,
             }
           : { mode: 'active', anyMessage: true });   // 私聊每条都理
       }
 
       const verdict = waker.shouldWake(msg);
       const isOwner = cfg.ownerIds.includes(msg.userId);
+      if (msg.isGroup) {
+        const triggered = verdict.wake || isOwner;
+        const collected = groupWindow.add(msg, triggered);
+        console.log('[' + (triggered ? '醒·' + (verdict.reason || 'owner') : collected ? '收集' : '静音') + '] ' + msg.name + '：' + msg.text.slice(0, 60));
+        return;
+      }
       if (!verdict.wake && !isOwner) {
         if (msg.isGroup) console.log('[静音] ' + msg.name + '：' + msg.text.slice(0, 40));
         return;
@@ -187,8 +209,6 @@ async function main() {
       const win = msg.isGroup ? cfg.wake.groupWindowMs : cfg.wake.privateWindowMs;
       clearTimeout(pending.get(msg.key));
       const batch = waker.batch(msg);
-      const dispatch = (items) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory }, items, cfg))
-        .catch((e) => console.error('[出错] ' + (e?.message || e)));
       if (batch.ready) { pending.delete(msg.key); void dispatch(batch.batch); return; }
       pending.set(msg.key, setTimeout(() => {
         pending.delete(msg.key);
@@ -202,6 +222,7 @@ async function main() {
   const proactive = new Proactive({
     brain, memory, bot, guard, human, conversations,
     ownerId: cfg.ownerIds[0],
+    ownerName: cfg.ownerNames[cfg.ownerIds[0]] || '',
     cfg: cfg.proactive,
   });
   proactive.start();
@@ -213,16 +234,24 @@ async function main() {
 }
 
 /** 处理一轮（可能是合并后的多条） */
-export async function handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory }, items, cfg) {
+export async function handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg) {
   const last = items[items.length - 1];
+  // 群聊末条可能是旁观者的普通发言，身份归属使用最近的触发者。
+  const actor = items.findLast(item => item.triggered) || last;
   const key = last.key;
   if (cfg.engine === 'pi' && last.conversationSeq !== undefined &&
       last.conversationSeq <= conversations?.read(key).readThroughSeq) {
     console.log('   （触发消息已由前一轮工具处理，跳过重复回合）');
     return;
   }
-  const text = Waker.joinBatch(items);
+  let text = Waker.joinBatch(items);
   const images = items.flatMap((i) => i.images || []).slice(0, 3);   // 一批最多喂 3 张，防炸请求体
+  const attachments = items.flatMap(item => (item.images || []).map(image => ({ item, image })));
+  if (attachments.length) {
+    text += '\n【附件顺序】\n' + attachments.slice(0, 3).map(({ item, image }, i) =>
+      `附件 ${i + 1}：${item.name || item.userId}（QQ ${item.userId}，消息序号 ${item.conversationSeq ?? '未知'}）${image.summary ? '；描述：' + image.summary : ''}`).join('\n');
+    if (attachments.length > 3) text += `\n另有 ${attachments.length - 3} 张图片超过本轮 3 张上限，未传入视觉内容，请勿猜测。`;
+  }
 
   const situation = last.isGroup
     ? '你在一个 QQ 群里。下面是群里刚连着说的几句话，最后一条是最新的。'
@@ -232,13 +261,13 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
   let qq;
   if (cfg.engine === 'pi' && conversations) {
     const { createQQTools } = await import('./qq-tools.js');
-    qq = createQQTools({ key, store: conversations, snapshot, bot, human, guard, dryRun: cfg.dryRun, socialMemory,
-      actor: { userId: last.userId, name: last.name, seq: last.conversationSeq } });
+    qq = createQQTools({ key, store: conversations, snapshot, bot, human, guard, dryRun: cfg.dryRun, socialMemory, relationships,
+      actor: { userId: actor.userId, name: actor.name, seq: actor.conversationSeq } });
   }
-  const { text: out } = await brain.reply({ key, userId: last.userId, userName: last.name, text, situation, images, snapshot, qq });
+  const { text: out } = await brain.reply({ key, userId: actor.userId, userName: actor.name, text, situation, images, snapshot, qq });
   if (qq) {
     console.log(cfg.dryRun ? '   [干跑] 计划发送 ' + qq.plannedMessages.length + ' 条' : '   工具实际发出 ' + qq.sentMessages.length + ' 条；已读确认=' + qq.closed);
-    if (qq.sentMessages.length) { waker.wake(key); memory.touch(last.userId, { name: last.name }); }
+    if (qq.sentMessages.length) { waker.wake(key); memory.touch(actor.userId, { name: actor.name }); }
     return; // 普通 assistant 文本不再自动转发，也不自动确认已读。
   }
   if (!out) { console.log('   （没说话）'); return; }
@@ -270,7 +299,7 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
   if (delivered && snapshot) conversations.markRead(key, snapshot.throughSeq);
   console.log('   发出 ' + r.sent + ' 条：' + r.parts.slice(0, r.sent).map((p) => p.slice(0, 18)).join(' | '));
   waker.wake(key);
-  memory.touch(last.userId, { name: last.name });
+  memory.touch(actor.userId, { name: actor.name });
 }
 
 // 直接跑才启动；被 import 时不启动

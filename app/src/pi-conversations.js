@@ -39,7 +39,7 @@ export class PiConversations {
 
   reply(input) { return this.queue.run(() => this.run(input)); }
 
-  async run({ key, systemPrompt, prompt, images = [], remember, qq }) {
+  async run({ key, systemPrompt, prompt, images = [], remember, qq, webTools = [] }) {
     await this.initialize();
     const sessionDir = path.join(this.dir, 'sessions', conversationId(key));
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -78,8 +78,8 @@ export class PiConversations {
       model: this.runtime.getModel('whale', this.model),
       thinkingLevel: this.options.thinkingLevel ?? 'high',
       sessionManager: manager, settingsManager: settings, resourceLoader: loader,
-      noTools: 'builtin', tools: [...rememberTools, ...(qq?.tools || [])].map(t => t.name),
-      customTools: [...rememberTools, ...(qq?.tools || [])],
+      noTools: 'builtin', tools: [...rememberTools, ...(qq?.tools || []), ...webTools].map(t => t.name),
+      customTools: [...rememberTools, ...(qq?.tools || []), ...webTools],
     });
     // Preserve AgentSession's persistence/boundary hooks before deciding whether
     // the completed batch needs another provider request.

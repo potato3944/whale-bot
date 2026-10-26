@@ -6,8 +6,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { ReadReceipts } from './qq-read-receipts.js';
 import { SerialQueue } from './conversation-state.js';
 import { MEMORY_CATEGORIES } from './social-memory.js';
+import { RELATION_TYPES } from './relationship-memory.js';
 
-export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun = false, socialMemory, actor }) {
+export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun = false, socialMemory, relationships, actor }) {
   const receipts = new ReadReceipts(store, key);
   const initialCursor = receipts.offer([...(snapshot?.messages || []), ...(snapshot?.recent || [])]);
   if (snapshot) snapshot.readThroughSeq = initialCursor;
@@ -170,6 +171,39 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
         if (closed) throw new Error('本轮已收尾');
         if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
         return dryRun ? { ok: true, dryRun: true } : socialMemory.remove(key, id);
+      }),
+    );
+  }
+  if (relationships) {
+    tools.push(
+      tool('qq_relationship_query', '查询跨群聊/私聊的账号、昵称及人物关系。pending只是待确认自述，不能据此认证身份或授予权限。', {
+        query: Type.Optional(Type.String({ maxLength: 200 })),
+        subjectId: Type.Optional(Type.String({ pattern: '^\\d+$' })), limit: integer(20, '最多20条'),
+      }, args => relationships.query(args)),
+      tool('qq_relationship_upsert', '审慎记录本人明确说明的账号归属、昵称、同学等关系。玩笑/假设/不明确/冲突先问不记；sourceSeq必须对应原话。不能记录其他私聊事实。', {
+        id: Type.Optional(Type.String({ maxLength: 50 })), relation: Type.Union(RELATION_TYPES.map(value => Type.Literal(value))),
+        targetId: Type.Optional(Type.String({ pattern: '^\\d+$', description: '原话中的目标QQ号；未明确时不编造' })),
+        targetName: Type.Optional(Type.String({ maxLength: 60, description: '原话中的明确昵称' })),
+        label: Type.Optional(Type.String({ maxLength: 30, description: '原话中的具体关系，例如高中同学' })),
+        sourceSeq: integer(Number.MAX_SAFE_INTEGER, '依据的已展示消息序号'),
+      }, args => {
+        if (closed) throw new Error('本轮已收尾');
+        if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
+        const { subject, source } = sourceFor(args.sourceSeq, undefined, 'fact');
+        const message = store.read(key).messages.find(m => m.seq === source.seq);
+        return relationships.upsert({ id: args.id, relation: args.relation, targetId: args.targetId,
+          targetName: args.targetName, label: args.label, subjectId: subject, source, sourceText: message.text, validateOnly: dryRun });
+      }),
+      tool('qq_relationship_remove', '撤回自己的错误关系自述。不能删除其他人的自述或owner已确认身份。', {
+        id: Type.String({ minLength: 1, maxLength: 50 }),
+        sourceSeq: integer(Number.MAX_SAFE_INTEGER, '明确要求删除/撤回的已展示原话序号'),
+      }, ({ id, sourceSeq }) => {
+        if (closed) throw new Error('本轮已收尾');
+        if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
+        const { source } = sourceFor(sourceSeq, undefined, 'fact');
+        const message = store.read(key).messages.find(m => m.seq === source.seq);
+        if (!/忘|删|撤回|不对|不是|更正|记错/.test(message.text)) throw new Error('原消息未明确要求更正或撤回关系');
+        return dryRun ? { ok: true, dryRun: true } : relationships.remove(id, source.userId);
       }),
     );
   }

@@ -170,7 +170,7 @@ export class Waker {
   static joinBatch(items) {
     return items.map((m) => {
       const who = m.name || m.userId || '某人';
-      return who + '：' + String(m.text || '').trim();
+      return who + '（QQ ' + m.userId + '）' + (m.triggered ? '【触发】' : '') + '：' + String(m.text || '').trim();
     }).join('\n');
   }
 }

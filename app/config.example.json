@@ -5,6 +5,11 @@
   "model": "deepseek-chat",
   "engine": "pi",
   "socialMemory": true,
+  "web": {
+    "enabled": true,
+    "provider": "tavily",
+    "apiKeyEnv": "TAVILY_API_KEY"
+  },
   "pi": {
     "contextWindow": 131072,
     "maxTokens": 4096,
@@ -36,7 +41,9 @@
     "groupAtOnly": true,
     "probability": 0.05,
     "privateWindowMs": 1500,
-    "groupWindowMs": 6000
+    "groupWindowMs": 6000,
+    "groupExtensionMs": 1000,
+    "groupMaxWindowMs": 10000
   },
   "// 6": "=== 怎么说话（拟人化）===",
   "humanize": {
@@ -63,5 +70,9 @@
   "diaryMaxChars": 2000,
   "proactive": {
     "enabled": false
-  }
+  },
+  "ownerNames": {
+    "YOUR_QQ_ID": "你的昵称"
+  },
+  "globalRelationships": true
 }

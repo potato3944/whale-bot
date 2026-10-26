@@ -61,7 +61,7 @@ test('Pi 真实 SDK：新进程恢复、会话隔离、工具白名单和 rememb
     let body = '';
     for await (const chunk of req) body += chunk;
     const payload = JSON.parse(body); calls.push(payload);
-    assert.deepEqual(payload.tools.map(tool => tool.function.name), ['remember']);
+    assert.deepEqual(payload.tools.map(tool => tool.function.name), ['remember', 'web_search', 'web_fetch']);
     const last = JSON.stringify(payload.messages.at(-1));
     let delta;
     if (last.includes('remember-me')) delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'remember', arguments: '{"fact":"喜欢蓝色"}' } }] };

@@ -12,6 +12,26 @@
  * 如果你想接别的平台（微信/Telegram/自研），照着这个接口再写一个就行。
  */
 
+import fs from 'node:fs';
+
+const faceNames = JSON.parse(fs.readFileSync(new URL('./qq-faces.json', import.meta.url), 'utf8'));
+const cleanLabel = value => typeof value === 'string' ? value.replace(/[\r\n]/g, ' ').replace(/^[/\[]|\]$/g, '').slice(0, 100) : '';
+
+export function faceName(data = {}) {
+  return cleanLabel(data.raw?.faceText || data.text || data.Text) || faceNames[String(data.id)] || `ID:${data.id ?? '未知'}`;
+}
+
+/** 保留图片及表情元数据；商城贴纸也可能作为 image 段上报。 */
+export function extractImages(segs) {
+  return (Array.isArray(segs) ? segs : [])
+    .filter(s => (s?.type === 'image' || s?.type === 'mface') && s.data)
+    .map(s => ({
+      url: String(s.data.url || ''), file: String(s.data.file || ''), size: Number(s.data.file_size) || 0,
+      summary: String(s.data.summary || ''), emoji_id: String(s.data.emoji_id || ''),
+      emoji_package_id: String(s.data.emoji_package_id || ''), sub_type: s.data.sub_type,
+    }));
+}
+
 /** 把 OneBot 消息段数组拼成纯文本 */
 function segsToText(segs) {
   if (!Array.isArray(segs)) return String(segs || '');
@@ -21,8 +41,9 @@ function segsToText(segs) {
     switch (s.type) {
       case 'text': out.push(s.data?.text || ''); break;
       case 'at': out.push('@' + (s.data?.qq || '')); break;
-      case 'image': out.push('[图片]'); break;
-      case 'face': out.push('[表情]'); break;
+      case 'image': out.push(s.data?.summary ? '[图片/表情包:' + cleanLabel(s.data.summary) + ']' : '[图片]'); break;
+      case 'mface': out.push('[表情包:' + (cleanLabel(s.data?.summary) || '商城表情') + ']'); break;
+      case 'face': out.push('[表情:' + faceName(s.data) + ']'); break;
       case 'reply': break;   // 引用单独处理
       default: break;
     }
@@ -110,9 +131,7 @@ export class OneBot {
       userId,
       name: String(ev.sender?.card || ev.sender?.nickname || userId),
       text: segsToText(segs),
-      images: (Array.isArray(segs) ? segs : [])
-        .filter((s) => s?.type === 'image' && s?.data)
-        .map((s) => ({ url: String(s.data.url || ''), file: String(s.data.file || ''), size: Number(s.data.file_size) || 0 })),
+      images: extractImages(segs),
       raw: segs,
       isAtMe: atMe,
       isQuoteMe: false,   // 需要额外查询被引用消息的发送者，见 resolveQuote

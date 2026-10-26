@@ -44,7 +44,7 @@ export class Proactive {
    * @param {object} [opts.cfg]      config.proactive
    * @param {(s:string)=>void} [opts.log]
    */
-  constructor({ brain, memory, bot, guard, human, conversations, ownerId, cfg = {}, log = console.log }) {
+  constructor({ brain, memory, bot, guard, human, conversations, ownerId, ownerName = '', cfg = {}, log = console.log }) {
     this.brain = brain;
     this.memory = memory;
     this.bot = bot;
@@ -52,6 +52,7 @@ export class Proactive {
     this.human = human;
     this.conversations = conversations;
     this.ownerId = String(ownerId || '');
+    this.ownerName = String(ownerName || '');
     this.enabled = cfg.enabled !== false;
     this.checkMin = Math.max(5, Number(cfg.checkMin) || 15);
     this.baseProb = Number(cfg.baseProb ?? 0.1);
@@ -105,7 +106,7 @@ export class Proactive {
 
   /** 真的说一次（定时器或手动 --once 都走这里） */
   async fire({ seed } = {}) {
-    const name = (this.memory.person(this.ownerId).name) || '主人';
+    const name = this.ownerName || (this.memory.person(this.ownerId).name) || '主人';
     const now = new Date();
     const when = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
     const pick = seed || SEEDS[Math.floor(Math.random() * SEEDS.length)];
