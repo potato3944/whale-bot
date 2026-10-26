@@ -24,8 +24,9 @@
   "wake": {
     "groupAtOnly": true,
     "probability": 0.05,
-    "privateWindowMs": 1500,
-    "groupWindowMs": 6000
+    "privateWindowMs": 6000,
+    "groupWindowMs": 8000,
+    "groupMaxWindowMs": 30000
   },
   "humanize": {
     "enabled": true,

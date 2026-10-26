@@ -51,7 +51,7 @@ export class PiConversations {
     const manager = file ? SessionManager.open(file, sessionDir) : SessionManager.create(this.cwd, sessionDir);
     const settings = SettingsManager.inMemory({
       cacheWarming: 'off', retry: { enabled: false, provider: { maxRetries: 0, timeoutMs: this.timeoutMs } },
-      compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+      compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 8192 },
     });
     const loader = new DefaultResourceLoader({
       cwd: this.cwd, agentDir: this.agentDir, settingsManager: settings,
@@ -93,10 +93,14 @@ export class PiConversations {
       const acknowledged = results.some(result => result.toolName === 'qq_mark_read' &&
         !result.isError && result.details?.ok === true &&
         (Number.isSafeInteger(result.details.acknowledgedThroughSeq) || result.details.dryRun === true));
+      // 发送工具成功即自动确认已读并收尾（见 qq-tools.js），同样视为本轮完成。
+      const sentAndAutoAcked = results.some(result => result.toolName === 'qq_send_message' &&
+        !result.isError && result.details?.ok !== false &&
+        (Number.isSafeInteger(result.details.acknowledgedThroughSeq) || result.details.dryRun === true));
       const allSucceeded = results.length === calls.length &&
         results.every(result => !result.isError && result.details?.ok !== false);
       if (qq?.closed && !qq.failed && !signal?.aborted &&
-          turn.message.stopReason === 'toolUse' && acknowledged && allSucceeded) {
+          turn.message.stopReason === 'toolUse' && (acknowledged || sentAndAutoAcked) && allSucceeded) {
         endedByAcknowledgement = true;
         acknowledgedAssistant = turn.message;
         return { action: 'end' };

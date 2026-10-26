@@ -1,8 +1,8 @@
-/** 群聊固定收集窗口：普通消息只加入，触发消息延长截止时间。 */
-export class GroupWindow {
-  constructor({ initialMs = 6000, extensionMs = 1000, maxMs = 10000, dispatch,
+/** 消息防抖合并窗口：窗口内任何消息都重置倒计时，硬上限封顶。 */
+export class MessageWindow {
+  constructor({ resetMs = 8000, maxMs = 30000, dispatch,
     now = Date.now, schedule = setTimeout, cancel = clearTimeout }) {
-    Object.assign(this, { initialMs, extensionMs, maxMs, dispatch, now, schedule, cancel });
+    Object.assign(this, { resetMs, maxMs, dispatch, now, schedule, cancel });
     this.pending = new Map();
   }
 
@@ -16,12 +16,12 @@ export class GroupWindow {
     }
     if (!batch && !triggered) return false;
     if (!batch) {
-      batch = { items: [], startedAt: now, deadline: now + Math.min(this.initialMs, this.maxMs) };
+      batch = { items: [], startedAt: now };
       this.pending.set(msg.key, batch);
-    } else if (triggered) {
-      batch.deadline = Math.min(batch.deadline + this.extensionMs, batch.startedAt + this.maxMs);
     }
     batch.items.push({ ...msg, triggered });
+    // 防抖：每条消息都把截止时间重置为「现在 + resetMs」，同时受整批硬上限约束。
+    batch.deadline = Math.min(now + this.resetMs, batch.startedAt + this.maxMs);
     this.cancel(batch.timer);
     batch.timer = this.schedule(() => this.flush(msg.key), Math.max(0, batch.deadline - now));
     return true;

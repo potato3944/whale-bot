@@ -40,10 +40,9 @@
   "wake": {
     "groupAtOnly": true,
     "probability": 0.05,
-    "privateWindowMs": 1500,
-    "groupWindowMs": 6000,
-    "groupExtensionMs": 1000,
-    "groupMaxWindowMs": 10000
+    "privateWindowMs": 6000,
+    "groupWindowMs": 8000,
+    "groupMaxWindowMs": 30000
   },
   "// 6": "=== 怎么说话（拟人化）===",
   "humanize": {

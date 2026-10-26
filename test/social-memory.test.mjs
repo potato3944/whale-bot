@@ -86,7 +86,8 @@ test('记忆工具验证对象与已展示来源，阻止跨会话和串人写�
   assert.equal(result.memory.subjectId, '11');
   assert.equal(result.memory.source.messageId, '1');
   await s.call('qq_mark_read', { throughSeq: 1 });
-  await assert.rejects(s.call('qq_memory_remove', { id: result.memory.id }), /收尾/);
+  const removed = await s.call('qq_memory_remove', { id: result.memory.id });
+  assert.equal(removed.ok, true);
 });
 
 test('干跑记忆工具不会改记忆文件', async t => {

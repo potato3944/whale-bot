@@ -28,18 +28,14 @@ export class Waker {
    * @param {string[]} [opts.keywords]     关键词
    * @param {string[]} [opts.ownerIds]     主人（说话必醒）
    * @param {number}  [opts.probability]   普通消息随机唤醒概率
-   * @param {number}  [opts.batchWindowMs] 多条消息合并窗口
    */
   constructor(opts = {}) {
     this.names = (opts.names || []).filter(Boolean);
     this.keywords = (opts.keywords || []).filter(Boolean);
     this.ownerIds = (opts.ownerIds || []).map(String);
     this.probability = opts.probability ?? 0.05;
-    this.batchWindowMs = opts.batchWindowMs ?? 3000;
     /** @type {Map<string, object>} 每个会话的唤醒配置 */
     this.configs = new Map();
-    /** @type {Map<string, object>} 待合并的消息缓冲 */
-    this.buffers = new Map();
   }
 
   /** 给某个会话设置唤醒配置 */
@@ -139,32 +135,6 @@ export class Waker {
 
     return { wake: false, reason: '' };
   }
-
-  /**
-   * 多条消息合并 —— 真人在群里说话是一串一串的，
-   * 等一小会儿把连着的几条凑一起再回，比一条条追着回自然得多。
-   *
-   * @returns {{ready:boolean, batch:object[]}}
-   */
-  batch(msg) {
-    const key = msg.key;
-    let b = this.buffers.get(key);
-    if (!b) { b = { items: [], timer: null }; this.buffers.set(key, b); }
-    b.items.push(msg);
-    if (b.items.length >= 6) return { ready: true, batch: this.#flush(key) };
-    return { ready: false, batch: [] };
-  }
-
-  #flush(key) {
-    const b = this.buffers.get(key);
-    if (!b) return [];
-    const items = b.items;
-    this.buffers.delete(key);
-    return items;
-  }
-
-  /** 合并窗口到了，把攒的都取出来 */
-  flush(key) { return this.#flush(key); }
 
   /** 把一批消息拼成一段给模型的输入 */
   static joinBatch(items) {

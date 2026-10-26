@@ -23,7 +23,7 @@ import { Role, PRIVATE_RULES } from './role.js';
 import { Brain } from './brain.js';
 import { Humanizer } from './humanize.js';
 import { Waker } from './wake.js';
-import { GroupWindow } from './group-window.js';
+import { MessageWindow } from './message-window.js';
 import { OneBot } from './transport-onebot.js';
 import { Guard } from './guard.js';
 import { Proactive } from './proactive.js';
@@ -82,10 +82,9 @@ export function loadConfig(explicitPath) {
     wake: {
       probability: cfg.wake?.probability ?? 0.05,
       groupAtOnly: cfg.wake?.groupAtOnly !== false,
-      privateWindowMs: cfg.wake?.privateWindowMs ?? 1500,
-      groupWindowMs: cfg.wake?.groupWindowMs ?? 6000,
-      groupExtensionMs: cfg.wake?.groupExtensionMs ?? 1000,
-      groupMaxWindowMs: cfg.wake?.groupMaxWindowMs ?? 10000,
+      privateWindowMs: cfg.wake?.privateWindowMs ?? 6000,
+      groupWindowMs: cfg.wake?.groupWindowMs ?? 8000,
+      groupMaxWindowMs: cfg.wake?.groupMaxWindowMs ?? 30000,
     },
 
     humanize: cfg.humanize || {},
@@ -147,14 +146,17 @@ async function main() {
     batchWindowMs: cfg.wake.groupWindowMs,
   });
 
-  /** @type {Map<string, NodeJS.Timeout>} 每个会话的合并定时器 */
-  const pending = new Map();
+  /** 每条新消息重置倒计时；群聊有硬上限，私聊没有。 */
   const dispatch = (items) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg))
     .catch((e) => console.error('[出错] ' + (e?.message || e)));
-  const groupWindow = new GroupWindow({
-    initialMs: cfg.wake.groupWindowMs,
-    extensionMs: cfg.wake.groupExtensionMs,
+  const groupWindow = new MessageWindow({
+    resetMs: cfg.wake.groupWindowMs,
     maxMs: cfg.wake.groupMaxWindowMs,
+    dispatch,
+  });
+  const privateWindow = new MessageWindow({
+    resetMs: cfg.wake.privateWindowMs,
+    maxMs: Infinity,
     dispatch,
   });
 
@@ -199,23 +201,9 @@ async function main() {
         console.log('[' + (triggered ? '醒·' + (verdict.reason || 'owner') : collected ? '收集' : '静音') + '] ' + msg.name + '：' + msg.text.slice(0, 60));
         return;
       }
-      if (!verdict.wake && !isOwner) {
-        if (msg.isGroup) console.log('[静音] ' + msg.name + '：' + msg.text.slice(0, 40));
-        return;
-      }
+      if (!verdict.wake && !isOwner) return;
       console.log('[醒·' + (verdict.reason || 'owner') + '] ' + msg.name + '：' + msg.text.slice(0, 60));
-
-      // 合并窗口：等人把话说完
-      const win = msg.isGroup ? cfg.wake.groupWindowMs : cfg.wake.privateWindowMs;
-      clearTimeout(pending.get(msg.key));
-      const batch = waker.batch(msg);
-      if (batch.ready) { pending.delete(msg.key); void dispatch(batch.batch); return; }
-      pending.set(msg.key, setTimeout(() => {
-        pending.delete(msg.key);
-        const items = waker.flush(msg.key);
-        if (!items.length) return;
-        void dispatch(items);
-      }, win));
+      privateWindow.add(msg, true);
     },
   });
 

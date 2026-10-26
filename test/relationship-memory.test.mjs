@@ -63,7 +63,7 @@ test('昵称冲突需明确更新id；别人不能篡改自述；owner可以删�
   assert.equal(memory.query().relationships.length, 0);
 });
 
-test('关系工具只能用已展示来源，不能用参数伪造确认；干跑不落盘、收尾后不能写入', async t => {
+test('关系工具只能用已展示来源，不能用参数伪造确认；干跑不落盘、收尾后写入仍可执行', async t => {
   const { memory, dir } = setup(t);
   const store = new ConversationState({ dir: path.join(dir, 'messages') });
   const key = 'private:99'; store.append({ key, userId: '99', messageId: 'm1', text: '我的大号是土豆只应天上有 QQ2303463055' });
@@ -79,7 +79,8 @@ test('关系工具只能用已展示来源，不能用参数伪造确认；干�
   await find(dry, 'qq_relationship_upsert').execute('dry', input);
   assert.equal(fs.readFileSync(memory.file, 'utf8'), before);
   await find(qq, 'qq_mark_read').execute('done', { throughSeq: 1 });
-  await assert.rejects(find(qq, 'qq_relationship_upsert').execute('closed', input), /已收尾/);
+  const afterClose = await find(qq, 'qq_relationship_upsert').execute('closed', input);
+  assert.equal(afterClose.details.relationship.subjectId, '99');
 });
 
 test('普通账号不能堆积超过20条未确认关系，已确认记录不被挤掉', t => {

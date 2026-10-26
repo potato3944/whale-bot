@@ -97,7 +97,11 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
       if (!parts.length || parts.some(p => !p || p.length > 2000) || sentMessages.length + plannedMessages.length + parts.length > 4) {
         throw new Error('每轮最多发送4条，每条1至2000字符');
       }
-      if (dryRun) { plannedMessages.push(...parts); return { ok: true, dryRun: true, plannedMessages: parts, sentMessages: [] }; }
+      if (dryRun) {
+        plannedMessages.push(...parts);
+        closed = true;
+        return { ok: true, dryRun: true, plannedMessages: parts, sentMessages: [], acknowledgedThroughSeq: receipts.cursor() };
+      }
       const start = sentMessages.length;
       const wantTyping = guard.shouldType(parts.join(''));
       try {
@@ -117,7 +121,10 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
         });
         const actual = sentMessages.slice(start);
         successfulPayloads.set(payloadKey, actual);
-        return { ok: true, key, sentMessages: actual };
+        // 发送成功即自动确认已读并收尾，省去模型再来一轮 qq_mark_read 调用。
+        receipts.acknowledge(receipts.cursor());
+        closed = true;
+        return { ok: true, key, sentMessages: actual, acknowledgedThroughSeq: receipts.cursor() };
       } catch (error) {
         failed = true;
         return { ok: false, key, error: error.message, sentMessages: sentMessages.slice(start), doNotRetry: true };
@@ -146,7 +153,6 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
     return { subject, source: { key, seq, messageId: message.messageId, userId: message.userId, time: message.time, excerpt: message.text.slice(0, 160) } };
   }
   function upsertMemory(args) {
-    if (closed) throw new Error('本轮已收尾，请下轮再更新记忆');
     if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更，不要逐句记笔记');
     const { subject, source } = sourceFor(args.sourceSeq, args.subjectId, args.category);
     if (dryRun) return { ok: true, dryRun: true, category: args.category };
@@ -168,7 +174,6 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
       tool('qq_memory_remove', '按id删除当前会话的一条错误、过时或已经说完的记忆，不影响旧人物账本和其他会话。', {
         id: Type.String({ minLength: 1, maxLength: 50 }),
       }, ({ id }) => {
-        if (closed) throw new Error('本轮已收尾');
         if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
         return dryRun ? { ok: true, dryRun: true } : socialMemory.remove(key, id);
       }),
@@ -187,7 +192,6 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
         label: Type.Optional(Type.String({ maxLength: 30, description: '原话中的具体关系，例如高中同学' })),
         sourceSeq: integer(Number.MAX_SAFE_INTEGER, '依据的已展示消息序号'),
       }, args => {
-        if (closed) throw new Error('本轮已收尾');
         if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
         const { subject, source } = sourceFor(args.sourceSeq, undefined, 'fact');
         const message = store.read(key).messages.find(m => m.seq === source.seq);
@@ -198,7 +202,6 @@ export function createQQTools({ key, store, snapshot, bot, human, guard, dryRun 
         id: Type.String({ minLength: 1, maxLength: 50 }),
         sourceSeq: integer(Number.MAX_SAFE_INTEGER, '明确要求删除/撤回的已展示原话序号'),
       }, ({ id, sourceSeq }) => {
-        if (closed) throw new Error('本轮已收尾');
         if (++memoryWrites > 4) throw new Error('本轮最多4次记忆变更');
         const { source } = sourceFor(sourceSeq, undefined, 'fact');
         const message = store.read(key).messages.find(m => m.seq === source.seq);

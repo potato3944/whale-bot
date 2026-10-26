@@ -81,25 +81,22 @@ test('真实 Pi SDK 的显式收尾策略与持久化', async t => {
     assert.ok(previousResults.every(m => JSON.parse(m.content).ok === true));
   });
 
-  await t.test('发送和确认分两批：两次请求，不额外生成收尾', async () => {
-    const s = setup([[send], [mark]]);
-    assert.equal((await s.runner.reply(s.input)).endedByAcknowledgement, true);
-    assert.equal(requests.length, 2);
+  await t.test('发送成功即自动确认已读并收尾：一次请求结束', async () => {
+    const s = setup([[send]]);
+    const result = await s.runner.reply(s.input);
+    assert.equal(result.endedByAcknowledgement, true);
+    assert.equal(requests.length, 1);
     assert.deepEqual(s.sent, ['在呢', '咋了']);
+    assert.equal(s.qq.closed, true);
+    assert.equal(s.store.read(s.key).readThroughSeq, 1);
   });
 
-  await t.test('只读不终止：读完后继续发送并确认', async () => {
-    const s = setup([[read], [send, mark]]);
+  await t.test('只读不终止：读完后继续发送并自动收尾', async () => {
+    const s = setup([[read], [send]]);
     await s.runner.reply(s.input);
     assert.equal(requests.length, 2);
     assert.equal(s.qq.closed, true);
-  });
-
-  await t.test('仅发送成功不会提前截断', async () => {
-    const s = setup([[send]]);
-    assert.equal((await s.runner.reply(s.input)).endedByAcknowledgement, false);
-    assert.equal(requests.length, 2);
-    assert.equal(s.qq.closed, false);
+    assert.equal(s.store.read(s.key).readThroughSeq, 1);
   });
 
   await t.test('选择不发言、只确认已读：一次请求结束', async () => {

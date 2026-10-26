@@ -76,7 +76,7 @@ test('大消息按预算翻页，最近消息翻页不重复，缓冲淘汰显�
   assert.ok(oldest.readThroughSeq >= 4);
 });
 
-test('会话绑定、调用ID幂等、已读收尾后禁止再发送', async t => {
+test('会话绑定、调用ID幂等、发送成功即收尾禁止再发送', async t => {
   const s = setup(t); s.append(1);
   const { call } = s.turn();
   for (const name of ['qq_get_recent_messages', 'qq_social_state', 'qq_send_message', 'qq_mark_read']) {
@@ -86,8 +86,7 @@ test('会话绑定、调用ID幂等、已读收尾后禁止再发送', async t =
   const b = await call('qq_send_message', { messages: '["一条","另一条"]' }, 'same-call');
   assert.deepEqual(a, b);
   assert.deepEqual(s.actual, ['一条', '另一条']);
-  const repeated = await call('qq_send_message', { messages: ['一条', '另一条'] });
-  assert.equal(repeated.alreadySent, true);
+  await assert.rejects(call('qq_send_message', { messages: ['一条', '另一条'] }), /已确认已读/);
   await assert.rejects(call('qq_send_message', { messages: '被篡改' }, 'same-call'), /参数不一致/);
   await call('qq_mark_read', { throughSeq: 1 });
   await assert.rejects(call('qq_send_message', { messages: '又来一句' }), /已确认已读/);
