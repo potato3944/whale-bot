@@ -1,6 +1,6 @@
 /**
  * 全链路群聊模拟：真实 bot 子进程 + OneBot WS/HTTP + 真实 Pi SDK + 本地假模型。
- * 使用真实8秒/30秒计时，模型固定延迟3秒；不连接真实QQ或模型供应商。
+ * 使用示例配置中的真实窗口计时，模型固定延迟3秒；不连接真实QQ或模型供应商。
  * node mock/group-chat-simulation.mjs
  */
 import assert from 'node:assert/strict';
@@ -13,22 +13,25 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
+import { loadConfig } from '../app/src/index.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const wake = loadConfig(path.join(repo, 'app/config.example.json')).wake;
+const groupMs = wake.groupWindowMs;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-group-simulation-'));
 const selfId = '99999', groupId = '700', token = 'local-simulation-only';
 const names = { '10001': 'owner', '10002': 'A', '10003': 'B', '10004': 'C' };
 const events = [
   [0, '10002', true, '帮我规划杭州一日游'],
-  [1000, '10003', true, '帮我看一下 Go 的 map 并发'],
-  [2000, '10004', false, '我去吃饭了'],
-  [3000, '10002', false, '预算只有300元'],
-  [4000, '10001', false, '解释一下 TCP 的三次握手'],
-  [5000, '10001', false, '用一句话说'],
-  [6000, '10003', false, '主要是并发读写会怎样'],
-  [7000, '10004', false, '你们继续聊'],
-  [8000, '10002', false, '不要安排爬山'],
-  [10000, '10004', false, '我又回来围观了'],
+  [groupMs * 0.1, '10003', true, '帮我看一下 Go 的 map 并发'],
+  [groupMs * 0.3, '10004', false, '我去吃饭了'],
+  [groupMs * 0.4, '10002', false, '预算只有300元'],
+  [groupMs * 0.5, '10001', false, '解释一下 TCP 的三次握手'],
+  [groupMs * 0.7, '10001', false, '用一句话说'],
+  [groupMs * 0.8, '10003', false, '主要是并发读写会怎样'],
+  [groupMs, '10004', false, '你们继续聊'],
+  [groupMs * 1.2, '10002', false, '不要安排爬山'],
+  [groupMs * 1.6, '10004', false, '我又回来围观了'],
 ];
 let origin = performance.now(), botLog = '', socket, child;
 const timeline = [], requests = [], sent = [], timers = [];
@@ -120,7 +123,7 @@ try {
     baseUrl: `http://127.0.0.1:${modelPort}/v1`, model: 'mock', engine: 'pi',
     roleCard: role, privateRoleCard: role, dataDir: path.join(dir, 'data'),
     ownerIds: ['10001'], ownerNames: { '10001': 'owner' }, names: ['小鲸鱼'], keywords: ['小鲸鱼'],
-    wake: { groupWindowMs: 8000, groupMaxWindowMs: 30000, privateWindowMs: 6000 },
+    wake,
     humanize: { enabled: false }, guard: { typing: { enabled: false } },
     proactive: { enabled: false }, web: { enabled: false }, socialMemory: false, globalRelationships: false,
     pi: { thinkingLevel: 'off' },
@@ -159,7 +162,9 @@ try {
       assert.ok(line.startsWith(`${names[userId]}（QQ ${userId}）`));
     });
   }
-  assert.ok(requests[0].at >= 15.5 && requests[0].at < 17.5, 'C at 10s must not extend A to 18s');
+  const aDeadline = (groupMs + 2 * wake.windowExtensionMs) / 1000;
+  assert.ok(requests[0].at >= aDeadline - 0.2 && requests[0].at < aDeadline + 1.5,
+    'C must not extend A beyond the deadline set by A\'s own last message');
   assert.ok(requests[1].at - sent[0].at < 1, 'B starts directly after A, without another debounce');
   assert.ok(requests[2].at - sent[1].at < 1, 'owner starts directly after B');
   assert.equal(requests[1].unreadCount, 0, 'B is not skipped even after shared unread was acknowledged');
@@ -190,7 +195,7 @@ try {
   fs.writeFileSync(path.join(dir, 'report.md'), [
     '# 群聊全链路模拟', '',
     '真实 bot 子进程、Pi SDK、OneBot WS/HTTP；仅模型服务为本地脚本。未连接真实 QQ 或模型供应商。',
-    '群聊等待8秒、收集上限30秒，假模型固定延迟3秒，关闭拟人发送延迟。', '',
+    `群聊初始${groupMs / 1000}秒，每条本人补充加${wake.windowExtensionMs / 1000}秒，最多${wake.windowMaxExtensions}次，假模型固定延迟3秒，关闭拟人发送延迟。`, '',
     `结果：${result?.pass ? 'PASS' : 'FAIL'}；模型请求 ${requests.length} 次，发送回复 ${sent.length} 条。`, '',
     '| 相对时间 | 事件 | 发起人 | 内容 |', '|---|---|---|---|', ...rows, '',
     '## 每轮实际发给模型的窗口消息', '',

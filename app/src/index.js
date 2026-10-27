@@ -82,9 +82,10 @@ export function loadConfig(explicitPath) {
     wake: {
       probability: cfg.wake?.probability ?? 0.05,
       groupAtOnly: cfg.wake?.groupAtOnly !== false,
-      privateWindowMs: cfg.wake?.privateWindowMs ?? 6000,
-      groupWindowMs: cfg.wake?.groupWindowMs ?? 8000,
-      groupMaxWindowMs: cfg.wake?.groupMaxWindowMs ?? 30000,
+      privateWindowMs: cfg.wake?.privateWindowMs ?? 5000,
+      groupWindowMs: cfg.wake?.groupWindowMs ?? 5000,
+      windowExtensionMs: cfg.wake?.windowExtensionMs ?? 3000,
+      windowMaxExtensions: cfg.wake?.windowMaxExtensions ?? 4,
     },
 
     humanize: cfg.humanize || {},
@@ -150,16 +151,18 @@ async function main() {
   const dispatch = (items, request) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg, request))
     .catch((e) => console.error('[出错] ' + (e?.message || e)));
   const groupWindow = new GroupMessageWindow({
-    resetMs: cfg.wake.groupWindowMs,
-    maxMs: cfg.wake.groupMaxWindowMs,
+    initialMs: cfg.wake.groupWindowMs,
+    extensionMs: cfg.wake.windowExtensionMs,
+    maxExtensions: cfg.wake.windowMaxExtensions,
     // 排队时群已读水位可能前进；保留入队时可见的附件，避免另一轮确认后丢图。
     capture: msg => ({ attachments: conversations.attachments(msg.key,
       conversations.snapshot(msg.key, { throughSeq: msg.conversationSeq }).messages.map(message => message.seq)) }),
     dispatch,
   });
   const privateWindow = new MessageWindow({
-    resetMs: cfg.wake.privateWindowMs,
-    maxMs: Infinity,
+    initialMs: cfg.wake.privateWindowMs,
+    extensionMs: cfg.wake.windowExtensionMs,
+    maxExtensions: cfg.wake.windowMaxExtensions,
     dispatch,
   });
 

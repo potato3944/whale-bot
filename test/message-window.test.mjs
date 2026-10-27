@@ -8,8 +8,9 @@ function clock(opts = {}) {
   let time = 0, id = 0;
   const timers = new Map(), batches = [];
   const window = new MessageWindow({
-    resetMs: opts.resetMs ?? 8000,
-    maxMs: opts.maxMs ?? 30000,
+    initialMs: opts.initialMs ?? 5000,
+    extensionMs: opts.extensionMs ?? 3000,
+    maxExtensions: opts.maxExtensions ?? 4,
     now: () => time,
     schedule: (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; },
     cancel: timer => timers.delete(timer),
@@ -30,77 +31,79 @@ function clock(opts = {}) {
 }
 const msg = (text, key = 'group:7', extra = {}) => ({ key, isGroup: true, userId: '11', name: '甲', text, ...extra });
 
-test('触发开窗，窗口内任何消息都重置倒计时，安静后整批派发', () => {
+test('初始等5秒；补充消息在原截止时间加3秒，文字和图片一并收集', () => {
   const c = clock();
   assert.equal(c.window.add(msg('路过'), false), false);
   c.window.add(msg('@bot'), true);
   c.tick(2000);
   const image = { url: 'https://example.com/meme.gif' };
   c.window.add(msg('[图片]', 'group:7', { userId: '22', images: [image] }), false);
-  c.tick(5000); assert.equal(c.batches.length, 0);      // 图片消息把倒计时重置到 8s
-  for (let i = 0; i < 5; i++) c.window.add(msg('聊天' + i), false);
-  c.tick(7999); assert.equal(c.batches.length, 0);
+  assert.equal(c.window.pending.get('group:7').deadline, 8000);
+  c.tick(5999); assert.equal(c.batches.length, 0);
   c.tick(1);
   assert.equal(c.batches.length, 1);
-  assert.equal(c.batches[0].length, 7);
+  assert.equal(c.batches[0].length, 2);
   assert.deepEqual(c.batches[0][1].images, [image]);
   assert.equal(c.window.pending.size, 0);
   assert.equal(c.timers.size, 0);
 });
 
-test('一直说话就一直等：每条消息重置整段倒计时', () => {
+test('延长按旧截止时间相加，不按消息到达时间重置', () => {
   const c = clock();
   c.window.add(msg('@bot'), true);
-  for (let i = 0; i < 3; i++) {
-    c.tick(5000);
-    c.window.add(msg('继续说' + i), false);
-    assert.equal(c.batches.length, 0);
-    assert.equal(c.window.pending.get('group:7').deadline, Math.min((i + 1) * 5000 + 8000, 30000));
-  }
-  c.tick(8000);
+  c.tick(4000);
+  c.window.add(msg('第一条补充'), true);
+  assert.equal(c.window.pending.get('group:7').deadline, 8000); // 不是4+5=9秒。
+  c.tick(1000);
+  c.window.add(msg('第二条补充'), true);
+  assert.equal(c.window.pending.get('group:7').deadline, 11000); // 不是5+5=10秒。
+  c.tick(6000);
   assert.equal(c.batches.length, 1);
-  assert.equal(c.batches[0].length, 4);
+  assert.equal(c.batches[0].length, 3);
 });
 
-test('硬上限封顶：消息不停时到 maxMs 强制派发，新消息开启下一轮', () => {
+test('最多延长4次：持续发言仍在第17秒提交，截止前消息全部保留', () => {
   const c = clock();
   c.window.add(msg('@bot'), true);
-  for (let i = 0; i < 10; i++) {
-    c.tick(4000);
-    c.window.add(msg('刷屏' + i), false);
-    if (i < 6) assert.equal(c.batches.length, 0);
+  for (let i = 0; i < 4; i++) {
+    c.tick(1000); c.window.add(msg('补充' + i), true);
+    assert.equal(c.window.pending.get('group:7').deadline, 5000 + (i + 1) * 3000);
   }
-  assert.equal(c.batches.length, 1);   // 30s 上限到了
+  for (let i = 0; i < 3; i++) {
+    c.tick(4000); c.window.add(msg('次数用完后继续' + i), true);
+    assert.equal(c.window.pending.get('group:7').deadline, 17000);
+  }
+  c.tick(999); assert.equal(c.batches.length, 0);
+  c.tick(1);
+  assert.equal(c.batches.length, 1);
+  assert.equal(c.batches[0].length, 8);
   c.window.add(msg('@bot 第二轮'), true);
-  c.tick(8000);
+  c.tick(5000);
   assert.equal(c.batches.length, 2);
 });
 
-test('私聊没有硬上限：每条消息重置 6 秒，一直发一直合并', () => {
-  const c = clock({ resetMs: 6000, maxMs: Infinity });
+test('私聊初始5秒，第一条不消耗延长次数，无补充时直接提交', () => {
+  const c = clock();
   c.window.add(msg('你好', 'private:1'), true);
-  for (let i = 0; i < 4; i++) {
-    c.tick(5000);
-    c.window.add(msg('接着' + i, 'private:1'), true);
-    assert.equal(c.batches.length, 0);
-  }
-  c.tick(6000);
+  assert.equal(c.window.pending.get('private:1').extensions, 0);
+  c.tick(4999); assert.equal(c.batches.length, 0);
+  c.tick(1);
   assert.equal(c.batches.length, 1);
-  assert.equal(c.batches[0].length, 5);
+  assert.equal(c.batches[0].length, 1);
 });
 
 test('不同会话独立；事件循环延迟不把过期消息混进上一批', () => {
   const c = clock();
   c.window.add(msg('@bot'), true);
   c.tick(1000); c.window.add(msg('@bot', 'group:8'), true);
-  c.tick(7000); assert.equal(c.batches[0][0].key, 'group:7');
+  c.tick(4000); assert.equal(c.batches[0][0].key, 'group:7');
   c.tick(1000); assert.equal(c.batches[1][0].key, 'group:8');
   c.window.add(msg('@bot'), true);
-  c.jump(9000);
+  c.jump(6000);
   assert.equal(c.window.add(msg('过期普通消息'), false), false);
   assert.equal(c.batches.length, 3);    // 过期窗口先派发，普通消息不开启新窗
   c.window.add(msg('@bot 新一轮'), true);
-  c.tick(8000); assert.equal(c.batches.length, 4);
+  c.tick(5000); assert.equal(c.batches.length, 4);
 });
 
 test('群聊只由主人、@或关键词触发；同一消息多条件只产生一次判定', () => {
@@ -126,10 +129,28 @@ test('群聊使用触发者身份，末尾其他群友的图片与内容一并�
   assert.deepEqual(input.images, [image]);
 });
 
-test('配置缺省值：群 8 秒重置 30 秒上限，私聊 6 秒重置', () => {
-  const cfg = loadConfig(new URL('../app/config.mock.json', import.meta.url).pathname);
-  assert.equal(cfg.wake.groupWindowMs, 8000);
-  assert.equal(cfg.wake.groupMaxWindowMs, 30000);
-  assert.equal(cfg.wake.privateWindowMs, 6000);
-  assert.equal(cfg.wake.groupExtensionMs, undefined);
+test('配置示例：群聊私聊都初始5秒，每次加3秒，最多4次', () => {
+  for (const file of ['../app/config.mock.json', '../app/config.example.json']) {
+    const cfg = loadConfig(new URL(file, import.meta.url).pathname);
+    assert.equal(cfg.wake.groupWindowMs, 5000);
+    assert.equal(cfg.wake.privateWindowMs, 5000);
+    assert.equal(cfg.wake.windowExtensionMs, 3000);
+    assert.equal(cfg.wake.windowMaxExtensions, 4);
+    assert.equal(cfg.wake.groupMaxWindowMs, undefined);
+    assert.equal(cfg.wake.groupExtensionMs, undefined);
+  }
+});
+
+test('私聊按配置延长：两秒后补充一句，截止为第8秒', () => {
+  const cfg = loadConfig(new URL('../app/config.example.json', import.meta.url).pathname);
+  const c = clock({ initialMs: cfg.wake.privateWindowMs,
+    extensionMs: cfg.wake.windowExtensionMs, maxExtensions: cfg.wake.windowMaxExtensions });
+  c.window.add(msg('第一句', 'private:1'), true);
+  c.tick(2000);
+  c.window.add(msg('补充一句', 'private:1'), true);
+  c.tick(5999);
+  assert.equal(c.batches.length, 0);
+  c.tick(1);
+  assert.equal(c.batches.length, 1);
+  assert.deepEqual(c.batches[0].map(item => item.text), ['第一句', '补充一句']);
 });

@@ -1,8 +1,18 @@
-/** 消息防抖合并窗口：窗口内任何消息都重置倒计时，硬上限封顶。 */
+function extendWindow(batch, policy) {
+  if (batch.deadline === undefined) {
+    batch.deadline = batch.startedAt + policy.initialMs;
+    batch.extensions = 0;
+  } else if (batch.extensions < policy.maxExtensions) {
+    batch.deadline += policy.extensionMs;
+    batch.extensions++;
+  }
+}
+
+/** 私聊收集窗口：初始等待，补充消息在原截止时间上有限次延长。 */
 export class MessageWindow {
-  constructor({ resetMs = 8000, maxMs = 30000, dispatch,
+  constructor({ initialMs = 5000, extensionMs = 3000, maxExtensions = 4, dispatch,
     now = Date.now, schedule = setTimeout, cancel = clearTimeout }) {
-    Object.assign(this, { resetMs, maxMs, dispatch, now, schedule, cancel });
+    Object.assign(this, { initialMs, extensionMs, maxExtensions, dispatch, now, schedule, cancel });
     this.pending = new Map();
   }
 
@@ -20,8 +30,7 @@ export class MessageWindow {
       this.pending.set(msg.key, batch);
     }
     batch.items.push({ ...msg, triggered });
-    // 防抖：每条消息都把截止时间重置为「现在 + resetMs」，同时受整批硬上限约束。
-    batch.deadline = Math.min(now + this.resetMs, batch.startedAt + this.maxMs);
+    extendWindow(batch, this);
     this.cancel(batch.timer);
     batch.timer = this.schedule(() => this.flush(msg.key), Math.max(0, batch.deadline - now));
     return true;
@@ -39,9 +48,9 @@ export class MessageWindow {
 
 /** 群聊按发起人开窗：本人续时，其他人只作背景；到期后按本群入队顺序提交。 */
 export class GroupMessageWindow {
-  constructor({ resetMs = 8000, maxMs = 30000, dispatch, capture = () => ({}),
+  constructor({ initialMs = 5000, extensionMs = 3000, maxExtensions = 4, dispatch, capture = () => ({}),
     now = Date.now, schedule = setTimeout, cancel = clearTimeout }) {
-    Object.assign(this, { resetMs, maxMs, dispatch, capture, now, schedule, cancel });
+    Object.assign(this, { initialMs, extensionMs, maxExtensions, dispatch, capture, now, schedule, cancel });
     this.pending = new Map();
     this.queues = new Map();
   }
@@ -68,7 +77,7 @@ export class GroupMessageWindow {
       batch.items.push({ ...msg, triggered: batch === own && triggered });
       collected = true;
       if (batch === own) {
-        batch.deadline = Math.min(now + this.resetMs, batch.startedAt + this.maxMs);
+        extendWindow(batch, this);
         this.cancel(batch.timer);
         batch.timer = this.schedule(() => this.finish(batch), Math.max(0, batch.deadline - now));
       }

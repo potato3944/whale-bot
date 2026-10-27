@@ -14,7 +14,7 @@ function clock(options = {}) {
   let time = 0, id = 0;
   const timers = new Map(), batches = [];
   const window = new GroupMessageWindow({
-    resetMs: 8000, maxMs: 30000, capture: options.capture,
+    initialMs: 5000, extensionMs: 3000, maxExtensions: 4, capture: options.capture,
     now: () => time,
     schedule: (fn, ms) => { timers.set(++id, { fn, at: time + ms }); return id; },
     cancel: timer => timers.delete(timer),
@@ -41,11 +41,11 @@ test('只有发起人续时，旁观消息保留为背景且不开新请求', ()
   const c = clock();
   assert.equal(c.window.add(msg('22', '路过'), false), false);
   c.window.add(msg('11', '@机器人'), true);
-  c.tick(5000);
+  c.tick(4000);
   c.window.add(msg('22', '旁观者发言'), false);
-  c.tick(3000);
+  c.tick(1000);
   assert.equal(c.batches.length, 1);
-  assert.equal(c.batches[0].at, 8000);
+  assert.equal(c.batches[0].at, 5000);
   assert.equal(c.batches[0].request.requesterId, '11');
   assert.deepEqual(c.batches[0].items.map(item => item.triggered), [true, false]);
 });
@@ -54,14 +54,15 @@ test('同时维护多个窗口；同一人连续 @ 合并，后到窗口已到�
   const c = clock();
   c.window.add(msg('11', '@机器人 A'), true);
   c.tick(1000); c.window.add(msg('22', '@机器人 B'), true);
-  c.tick(2000); c.window.add(msg('22', '@机器人 B补充'), true);
+  c.tick(1000); c.window.add(msg('22', '@机器人 B补充'), true);
   assert.equal(c.window.pending.size, 2);
-  c.tick(3000); c.window.add(msg('11', 'A继续说'), false);
-  c.tick(5000); // B 在 11 秒到期，A 需等到 14 秒。
+  c.tick(1000); c.window.add(msg('11', 'A继续说'), false);
+  c.tick(1000); c.window.add(msg('11', 'A再补充'), false);
+  c.tick(5000); // B 在9秒到期，A经两次延长需等到11秒。
   assert.equal(c.batches.length, 0);
-  c.tick(3000);
+  c.tick(2000);
   assert.deepEqual(c.batches.map(batch => batch.request.requesterId), ['11', '22']);
-  assert.deepEqual(c.batches.map(batch => batch.at), [14000, 14000]);
+  assert.deepEqual(c.batches.map(batch => batch.at), [11000, 11000]);
   assert.equal(c.batches[0].items.filter(item => item.triggered).length, 1);
   assert.equal(c.batches[1].items.filter(item => item.triggered).length, 2);
   assert.ok(c.batches[1].items.filter(item => item.triggered).every(item => item.userId === '22'));
@@ -76,29 +77,31 @@ test('owner每条普通消息都能开窗或续自己的窗口，不延长别人
   c.tick(1000);
   const first = msg('99', 'owner普通消息');
   c.window.add(first, waker.shouldWake(first).wake);
-  c.tick(4000);
+  c.tick(1000);
   const second = msg('99', 'owner继续说');
   c.window.add(second, waker.shouldWake(second).wake);
   c.tick(3000);
-  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 8000]]);
-  c.tick(5000);
-  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 8000], ['99', 13000]]);
+  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 5000]]);
+  c.tick(4000);
+  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 5000], ['99', 9000]]);
   assert.equal(c.batches[1].items.filter(item => item.triggered).length, 2);
 });
 
-test('每窗硬上限仍为30秒；已到期窗口不混入事件循环阻塞后到达的新消息', () => {
+test('每人最多延长4次，17秒封存；阻塞后新消息不进入过期窗口', () => {
   const c = clock();
   c.window.add(msg('11', '@机器人 A'), true);
   c.tick(1000); c.window.add(msg('22', '@机器人 B'), true);
-  c.tick(6000); c.window.add(msg('11', 'A继续1'), false);
+  for (let i = 0; i < 4; i++) {
+    c.tick(500); c.window.add(msg('11', 'A补充' + i), false);
+  }
   for (let i = 0; i < 3; i++) {
-    c.tick(7000); c.window.add(msg('11', 'A继续' + (i + 2)), false);
+    c.tick(4000); c.window.add(msg('11', 'A继续' + i), false);
   }
   assert.equal(c.batches.length, 0);
   c.tick(2000);
-  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 30000], ['22', 30000]]);
+  assert.deepEqual(c.batches.map(batch => [batch.request.requesterId, batch.at]), [['11', 17000], ['22', 17000]]);
   c.window.add(msg('11', '@机器人 新一轮'), true);
-  c.jump(9000);
+  c.jump(6000);
   assert.equal(c.window.add(msg('11', '过期普通消息'), false), false);
   assert.equal(c.batches.length, 3);
   assert.ok(!c.batches[2].items.some(item => item.text === '过期普通消息'));
@@ -108,14 +111,14 @@ test('不同群独立计时，不被另一个群较早入队的窗口阻塞', ()
   const c = clock();
   c.window.add(msg('11', '@机器人 A'), true);
   c.tick(1000); c.window.add(msg('11', '@机器人 B', { key: 'group:8' }), true);
-  c.tick(4000); c.window.add(msg('11', 'A继续说'), false);
+  c.tick(1000); c.window.add(msg('11', 'A继续说'), false);
   c.tick(4000);
   assert.equal(c.batches[0].items[0].key, 'group:8');
-  c.tick(4000);
+  c.tick(2000);
   assert.equal(c.batches[1].items[0].key, 'group:7');
 });
 
-test('生成期间排队的到期窗口，前一轮结束后直接执行，不再等待8秒', async () => {
+test('生成期间排队的到期窗口，前一轮结束后直接执行，不重等5秒', async () => {
   let release;
   const blocked = new Promise(resolve => { release = resolve; });
   const queue = new SerialQueue(), tasks = [], started = [];
@@ -125,7 +128,7 @@ test('生成期间排队的到期窗口，前一轮结束后直接执行，不�
   })) });
   c.window.add(msg('11', '@机器人 A'), true);
   c.tick(1000); c.window.add(msg('22', '@机器人 B'), true);
-  c.tick(7000);
+  c.tick(4000);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(started, ['11']);
   c.tick(1000);
@@ -153,8 +156,8 @@ test('群共享已读不跳过其他人的请求；身份、入队时图片均�
     store.snapshot(key, { throughSeq: value.conversationSeq }).messages.map(message => message.seq)) }) });
   c.window.add(incoming('11', '@机器人 A'), true);
   c.tick(1000); c.window.add(incoming('22', '@机器人 看我的图片'), true);
-  c.tick(4000); c.window.add(incoming('11', 'A补充'), false);
-  c.tick(8000);
+  c.tick(1000); c.window.add(incoming('11', 'A补充'), false);
+  c.tick(6000);
   const calls = [];
   const brain = { reply: async input => {
     calls.push(input);
