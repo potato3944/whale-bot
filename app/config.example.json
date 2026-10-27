@@ -12,6 +12,8 @@
   },
   "pi": {
     "contextWindow": 131072,
+    "groupCompactAtTokens": 16384,
+    "groupKeepRecentTokens": 4096,
     "maxTokens": 4096,
     "thinkingLevel": "off",
     "thinkingFormat": "deepseek"

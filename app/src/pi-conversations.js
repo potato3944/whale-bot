@@ -49,9 +49,22 @@ export class PiConversations {
     catch (e) { if (e.code !== 'ENOENT') throw e; }
     if (file && path.dirname(file) !== sessionDir) throw new Error('会话文件越界');
     const manager = file ? SessionManager.open(file, sessionDir) : SessionManager.create(this.cwd, sessionDir);
+    const model = this.runtime.getModel('whale', this.model);
+    const compaction = { enabled: true, reserveTokens: 8192, keepRecentTokens: 8192 };
+    if (key.startsWith('group:')) {
+      const compactAtTokens = this.options.groupCompactAtTokens ?? 16384;
+      const keepRecentTokens = this.options.groupKeepRecentTokens ?? 4096;
+      if (!Number.isSafeInteger(compactAtTokens) || compactAtTokens <= 0 ||
+          !Number.isSafeInteger(keepRecentTokens) || keepRecentTokens <= 0 || keepRecentTokens >= compactAtTokens) {
+        throw new Error('群聊压缩参数须为正整数，且 groupKeepRecentTokens 小于 groupCompactAtTokens');
+      }
+      // 保留模型真实窗口；通过预留量提前触发 Pi 压缩，不删除原始会话记录。
+      compaction.reserveTokens = Math.max(8192, model.contextWindow - compactAtTokens);
+      compaction.keepRecentTokens = keepRecentTokens;
+    }
     const settings = SettingsManager.inMemory({
       cacheWarming: 'off', retry: { enabled: false, provider: { maxRetries: 0, timeoutMs: this.timeoutMs } },
-      compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 8192 },
+      compaction,
     });
     const loader = new DefaultResourceLoader({
       cwd: this.cwd, agentDir: this.agentDir, settingsManager: settings,
@@ -75,7 +88,7 @@ export class PiConversations {
     }];
     const { session } = await createAgentSession({
       cwd: this.cwd, agentDir: this.agentDir, modelRuntime: this.runtime,
-      model: this.runtime.getModel('whale', this.model),
+      model,
       thinkingLevel: this.options.thinkingLevel ?? 'high',
       sessionManager: manager, settingsManager: settings, resourceLoader: loader,
       noTools: 'builtin', tools: [...rememberTools, ...(qq?.tools || []), ...webTools].map(t => t.name),
