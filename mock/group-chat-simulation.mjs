@@ -86,11 +86,12 @@ const model = http.createServer(async (req, res) => {
   const actor = /本轮回应对象：(.+?)（QQ (\d+)）/.exec(prompt);
   assert.ok(actor, 'bot must bind each round to the requesting person');
   const trigger = prompt.split('【本次触发消息】')[1] || '';
-  const ownMessages = trigger.split('\n').filter(line => line.startsWith(`${actor[1]}（QQ ${actor[2]}）`))
+  const windowMessages = trigger.split('\n').filter(line => /（QQ \d+）/.test(line));
+  const ownMessages = windowMessages.filter(line => line.startsWith(`${actor[1]}（QQ ${actor[2]}）`))
     .map(line => line.slice(line.indexOf('：') + 1));
   const snapshotLine = prompt.split('【会话消息快照】')[1].split('\n')[1];
   const snapshot = JSON.parse(snapshotLine);
-  const entry = record('model_start', { actor: actor[1], actorId: actor[2], ownMessages,
+  const entry = record('model_start', { actor: actor[1], actorId: actor[2], ownMessages, windowMessages,
     unreadCount: snapshot.unreadCount });
   requests.push({ ...entry, payload });
   const callId = 'simulation-' + requests.length;
@@ -148,6 +149,16 @@ try {
   await waitFor(() => sent.length === 3 && (botLog.match(/工具实际发出 1 条；已读确认=true/g) || []).length === 3, 45000);
   assert.deepEqual(requests.map(entry => entry.actor), ['A', 'B', 'owner']);
   assert.deepEqual(requests.map(entry => entry.ownMessages.length), [3, 2, 2]);
+  for (const [index, start] of [0, 1, 4].entries()) {
+    const expected = events.slice(start);
+    assert.deepEqual(requests[index].windowMessages.map(line => line.slice(line.indexOf('：') + 1)),
+      expected.map(([_at, _userId, mention, text]) => (mention ? '@' + selfId : '') + text),
+      'every person\'s window messages must reach the actual model request, in order');
+    requests[index].windowMessages.forEach((line, j) => {
+      const userId = expected[j][1];
+      assert.ok(line.startsWith(`${names[userId]}（QQ ${userId}）`));
+    });
+  }
   assert.ok(requests[0].at >= 15.5 && requests[0].at < 17.5, 'C at 10s must not extend A to 18s');
   assert.ok(requests[1].at - sent[0].at < 1, 'B starts directly after A, without another debounce');
   assert.ok(requests[2].at - sent[1].at < 1, 'owner starts directly after B');
@@ -156,6 +167,7 @@ try {
   assert.ok(!requests.some(entry => entry.actor === 'C'));
   result = { pass: true, modelCalls: requests.length, replies: sent.length, checks: [
     'A/B/owner 各一轮，C普通发言不触发', '同一人的补充合并，其他人不续时',
+    '窗口内所有人的消息按顺序进入实际模型请求，不只包含发起人',
     '按入队顺序处理，已到期窗口不重新等待', '共享已读不吞掉其他人的请求',
   ] };
   console.log('PASS ' + JSON.stringify(result));
@@ -174,13 +186,16 @@ try {
   for (const server of [api, model, wsHttp]) { server.closeAllConnections(); server.close(); }
   fs.writeFileSync(path.join(dir, 'bot.log'), botLog);
   fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ result, timeline, requests }, null, 2));
-  const rows = timeline.map(entry => `| ${entry.at.toFixed(2)}s | ${entry.kind} | ${entry.actor || ''} | ${entry.text || entry.ownMessages?.join(' / ') || ''} |`);
+  const rows = timeline.map(entry => `| ${entry.at.toFixed(2)}s | ${entry.kind} | ${entry.actor || ''} | ${entry.text || (entry.windowMessages ? `输入${entry.windowMessages.length}条全员消息；本人内容：${entry.ownMessages.join(' / ')}` : '')} |`);
   fs.writeFileSync(path.join(dir, 'report.md'), [
     '# 群聊全链路模拟', '',
     '真实 bot 子进程、Pi SDK、OneBot WS/HTTP；仅模型服务为本地脚本。未连接真实 QQ 或模型供应商。',
     '群聊等待8秒、收集上限30秒，假模型固定延迟3秒，关闭拟人发送延迟。', '',
     `结果：${result?.pass ? 'PASS' : 'FAIL'}；模型请求 ${requests.length} 次，发送回复 ${sent.length} 条。`, '',
     '| 相对时间 | 事件 | 发起人 | 内容 |', '|---|---|---|---|', ...rows, '',
+    '## 每轮实际发给模型的窗口消息', '',
+    ...requests.flatMap(entry => [`### ${entry.actor}：${entry.windowMessages.length}条`, '',
+      '```text', ...entry.windowMessages, '```', '']),
     '回复由脚本根据收到的输入生成，只验证收集、队列、身份和发送链路，不验证模型理解或聊天质量。',
   ].join('\n'));
   console.log('Report: ' + path.join(dir, 'report.md'));
