@@ -53,7 +53,11 @@ export class GroupMessageWindow {
     Object.assign(this, { initialMs, extensionMs, maxExtensions, dispatch, capture, now, schedule, cancel });
     this.pending = new Map();
     this.queues = new Map();
+    // 从封存起保留，直到真正开始处理（包括提交到全局串行队列之后）。
+    this.queued = new Map();
   }
+
+  isQueued(key, userId) { return this.queued.has(`${key}:${userId}`); }
 
   add(msg, triggered) {
     const now = this.now();
@@ -63,7 +67,7 @@ export class GroupMessageWindow {
     }
     const id = `${msg.key}:${msg.userId}`;
     let own = this.pending.get(id);
-    if (!own && triggered) {
+    if (!own && triggered && !this.queued.has(id)) {
       own = { id, key: msg.key, items: [], startedAt: now, ready: false,
         request: { ...this.capture(msg), requesterId: String(msg.userId) } };
       this.pending.set(id, own);
@@ -90,10 +94,22 @@ export class GroupMessageWindow {
     this.cancel(batch.timer);
     batch.ready = true;
     if (this.pending.get(batch.id) === batch) this.pending.delete(batch.id);
+    this.queued.set(batch.id, batch);
     const queue = this.queues.get(batch.key);
     while (queue?.[0]?.ready) {
       const next = queue.shift();
-      this.dispatch(next.items, next.request);
+      const release = () => {
+        // 前一轮完成时不能误删同一用户后来入队的新一轮。
+        if (this.queued.get(next.id) === next) this.queued.delete(next.id);
+      };
+      try {
+        const completion = this.dispatch(next.items, { ...next.request, onStart: release });
+        // 队列拒收或处理失败也释放占位，避免该用户永久无法发起请求。
+        if (completion?.then) void completion.then(release, release);
+      } catch (error) {
+        release();
+        throw error;
+      }
     }
     if (!queue?.length) this.queues.delete(batch.key);
   }

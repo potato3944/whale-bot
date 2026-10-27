@@ -20,7 +20,8 @@ function clock(options = {}) {
     cancel: timer => timers.delete(timer),
     dispatch: (items, request) => {
       batches.push({ items, request, at: time });
-      options.dispatch?.(items, request);
+      if (options.dispatch) return options.dispatch(items, request);
+      request.onStart?.();
     },
   });
   return { window, batches, timers,
@@ -123,6 +124,7 @@ test('生成期间排队的到期窗口，前一轮结束后直接执行，不�
   const blocked = new Promise(resolve => { release = resolve; });
   const queue = new SerialQueue(), tasks = [], started = [];
   const c = clock({ dispatch: (_items, request) => tasks.push(queue.run(async () => {
+    request.onStart();
     started.push(request.requesterId);
     if (request.requesterId === '11') await blocked;
   })) });
@@ -173,4 +175,95 @@ test('群共享已读不跳过其他人的请求；身份、入队时图片均�
   assert.deepEqual(calls.map(input => input.userId), ['11', '22']);
   assert.ok(calls[1].situation.includes('本轮回应对象：22（QQ 22）'));
   assert.equal(calls[1].snapshot.messages.length, 0, 'shared unread was already acknowledged by A');
+});
+
+test('已封存但仍在本群FIFO排队：同一用户后续触发丢弃，封存内容不变', () => {
+  const c = clock();
+  c.window.add(msg('11', '@机器人 A'), true);
+  c.tick(1000); c.window.add(msg('22', '@机器人 B原问题'), true);
+  c.tick(1000); c.window.add(msg('11', 'A补充1'), false);
+  c.tick(1000); c.window.add(msg('11', 'A补充2'), false);
+  c.tick(3000); // B已在6秒封存，A等到11秒。
+  assert.equal(c.window.isQueued('group:7', '22'), true);
+  c.window.add(msg('22', '@机器人 B重复1'), true);
+  c.tick(1000); c.window.add(msg('22', '@机器人 B重复2'), true);
+  assert.equal(c.window.pending.has('group:7:22'), false);
+  c.tick(4000);
+  assert.deepEqual(c.batches.map(batch => batch.request.requesterId), ['11', '22']);
+  assert.deepEqual(c.batches[1].items.filter(item => item.triggered).map(item => item.text), ['@机器人 B原问题']);
+  assert.equal(c.window.queued.size, 0);
+});
+
+test('已提交到全局处理队列但还未开始：重复触发不产生新窗口或模型回合', async () => {
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const queue = new SerialQueue(), tasks = [], started = [];
+  const c = clock({ dispatch: (_items, request) => {
+    const task = queue.run(async () => {
+      request.onStart();
+      started.push(request.requesterId);
+      if (request.requesterId === '11') await blocked;
+    });
+    tasks.push(task); return task;
+  } });
+  c.window.add(msg('11', '@机器人 A'), true);
+  c.tick(1000); c.window.add(msg('22', '@机器人 B'), true);
+  c.tick(4000);
+  await new Promise(resolve => setImmediate(resolve));
+  c.tick(1000);
+  assert.equal(c.window.isQueued('group:7', '22'), true);
+  assert.equal(c.window.add(msg('22', '@机器人 不要再开一轮'), true), false);
+  c.tick(10000);
+  assert.equal(tasks.length, 2);
+  assert.equal(c.window.pending.size, 0);
+  assert.deepEqual(started, ['11']);
+  release(); await Promise.all(tasks);
+  assert.deepEqual(started, ['11', '22']);
+  assert.equal(c.window.queued.size, 0);
+});
+
+test('owner排队后普通消息也去重；同一账号在其他群不受影响', () => {
+  const c = clock({ dispatch() {} }); // 模拟全局队列暂不执行任何请求。
+  const waker = new Waker({ ownerIds: ['99'] });
+  const owner = msg('99', 'owner第一次');
+  c.window.add(owner, waker.shouldWake(owner).wake);
+  c.tick(5000);
+  const again = msg('99', 'owner排队时又说话');
+  assert.equal(c.window.add(again, waker.shouldWake(again).wake), false);
+  const other = msg('99', '其他群独立触发', { key: 'group:8' });
+  assert.equal(c.window.add(other, waker.shouldWake(other).wake), true);
+  c.tick(5000);
+  assert.equal(c.batches.length, 2);
+  assert.equal(c.window.isQueued('group:7', '99'), true);
+  assert.equal(c.window.isQueued('group:8', '99'), true);
+});
+
+test('开始执行后允许新一轮；旧任务完成不能清掉新一轮的排队占位', async () => {
+  let releaseOld, releaseNext;
+  const old = new Promise(resolve => { releaseOld = resolve; });
+  const next = new Promise(resolve => { releaseNext = resolve; });
+  const c = clock({ dispatch: (_items, request) => {
+    if (c.batches.length === 1) { request.onStart(); return old; }
+    return next;
+  } });
+  c.window.add(msg('11', '@机器人 第一轮'), true);
+  c.tick(5000);
+  assert.equal(c.window.isQueued('group:7', '11'), false);
+  assert.equal(c.window.add(msg('11', '@机器人 已开始处理后新一轮'), true), true);
+  c.tick(5000);
+  assert.equal(c.window.isQueued('group:7', '11'), true);
+  releaseOld(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(c.window.isQueued('group:7', '11'), true);
+  assert.equal(c.window.add(msg('11', '@机器人 第三轮应丢弃'), true), false);
+  releaseNext(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(c.window.isQueued('group:7', '11'), false);
+});
+
+test('全局队列拒收时释放去重占位，允许用户后续重新触发', async () => {
+  const c = clock({ dispatch: () => Promise.reject(new Error('queue full')) });
+  c.window.add(msg('11', '@机器人'), true);
+  c.tick(5000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(c.window.isQueued('group:7', '11'), false);
+  assert.equal(c.window.add(msg('11', '@机器人 重试'), true), true);
 });

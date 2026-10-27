@@ -148,7 +148,10 @@ async function main() {
   });
 
   /** 群聊按发起人独立计时；处理回合仍全局串行。 */
-  const dispatch = (items, request) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg, request))
+  const dispatch = (items, request) => turns.run(() => {
+    request?.onStart?.();
+    return handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg, request);
+  })
     .catch((e) => console.error('[出错] ' + (e?.message || e)));
   const groupWindow = new GroupMessageWindow({
     initialMs: cfg.wake.groupWindowMs,
@@ -204,7 +207,8 @@ async function main() {
       if (msg.isGroup) {
         const triggered = verdict.wake || isOwner;
         const collected = groupWindow.add(msg, triggered);
-        console.log('[' + (triggered ? '醒·' + (verdict.reason || 'owner') : collected ? '收集' : '静音') + '] ' + msg.name + '：' + msg.text.slice(0, 60));
+        const duplicate = triggered && groupWindow.isQueued(msg.key, msg.userId);
+        console.log('[' + (duplicate ? '忽略·已排队' : triggered ? '醒·' + (verdict.reason || 'owner') : collected ? '收集' : '静音') + '] ' + msg.name + '：' + msg.text.slice(0, 60));
         return;
       }
       if (!verdict.wake && !isOwner) return;

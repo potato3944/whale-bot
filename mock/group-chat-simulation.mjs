@@ -32,6 +32,8 @@ const events = [
   [groupMs, '10004', false, '你们继续聊'],
   [groupMs * 1.2, '10002', false, '不要安排爬山'],
   [groupMs * 1.6, '10004', false, '我又回来围观了'],
+  [groupMs * 1.8, '10003', true, 'B已封存还在本群排队，这次应丢弃'],
+  [groupMs + 2 * wake.windowExtensionMs + 2000, '10003', true, 'B已进入全局队列但未开始，这次也应丢弃'],
 ];
 let origin = performance.now(), botLog = '', socket, child;
 const timeline = [], requests = [], sent = [], timers = [];
@@ -152,8 +154,13 @@ try {
   await waitFor(() => sent.length === 3 && (botLog.match(/工具实际发出 1 条；已读确认=true/g) || []).length === 3, 45000);
   assert.deepEqual(requests.map(entry => entry.actor), ['A', 'B', 'owner']);
   assert.deepEqual(requests.map(entry => entry.ownMessages.length), [3, 2, 2]);
-  for (const [index, start] of [0, 1, 4].entries()) {
-    const expected = events.slice(start);
+  const windows = [
+    [0, groupMs + 2 * wake.windowExtensionMs],
+    [groupMs * 0.1, groupMs * 0.1 + groupMs + wake.windowExtensionMs],
+    [groupMs * 0.5, groupMs * 0.5 + groupMs + wake.windowExtensionMs],
+  ];
+  for (const [index, [start, end]] of windows.entries()) {
+    const expected = events.filter(([at]) => at >= start && at < end);
     assert.deepEqual(requests[index].windowMessages.map(line => line.slice(line.indexOf('：') + 1)),
       expected.map(([_at, _userId, mention, text]) => (mention ? '@' + selfId : '') + text),
       'every person\'s window messages must reach the actual model request, in order');
@@ -170,9 +177,12 @@ try {
   assert.equal(requests[1].unreadCount, 0, 'B is not skipped even after shared unread was acknowledged');
   assert.equal(requests[2].unreadCount, 0, 'owner is not skipped after shared unread was acknowledged');
   assert.ok(!requests.some(entry => entry.actor === 'C'));
+  assert.equal((botLog.match(/\[忽略·已排队\]/g) || []).length, 2,
+    'both same-group FIFO and global-queue duplicates must be discarded');
   result = { pass: true, modelCalls: requests.length, replies: sent.length, checks: [
     'A/B/owner 各一轮，C普通发言不触发', '同一人的补充合并，其他人不续时',
     '窗口内所有人的消息按顺序进入实际模型请求，不只包含发起人',
+    '已封存排队时重复触发丢弃，覆盖本群FIFO和全局处理队列',
     '按入队顺序处理，已到期窗口不重新等待', '共享已读不吞掉其他人的请求',
   ] };
   console.log('PASS ' + JSON.stringify(result));
