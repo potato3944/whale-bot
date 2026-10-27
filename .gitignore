@@ -6,7 +6,6 @@ node_modules/
 .env.*
 !.env.example
 app/config.json
-app/role.md
 app/data/
 app/data-*/
 napcat-data/
