@@ -8,6 +8,7 @@
     "check": "node app/src/index.js --check --config ./app/config.json",
     "dry": "node app/src/index.js --dry-run --config ./app/config.json",
     "selftest": "node mock/mock-stack.mjs",
+    "simulate:group": "node mock/group-chat-simulation.mjs",
     "test": "node --test test/*.test.mjs",
     "diary": "node app/src/diary.js",
     "diary:auto": "node app/src/diary.js auto",
