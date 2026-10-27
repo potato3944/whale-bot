@@ -44,9 +44,32 @@ export class ConversationState {
     };
     state.messages.push(entry);
     state.messages = state.messages.slice(-this.limit);
+    // 附件引用单独保存，不把 QQ 签名 URL 拼进模型快照或工具返回。
+    const images = (Array.isArray(msg.images) ? msg.images : []).slice(0, 3).map(image => ({
+      url: typeof image.url === 'string' && /^https?:\/\//i.test(image.url) && image.url.length <= 8192 ? image.url : '',
+      emoji_id: /^[a-f0-9]{32}$/i.test(image.emoji_id || '') ? image.emoji_id : '',
+      summary: String(image.summary || '').slice(0, 300),
+    })).filter(image => image.url || image.emoji_id);
+    if (images.length) {
+      state.imageRefs ??= {};
+      state.imageRefs[entry.seq] = images;
+    }
+    if (state.imageRefs) {
+      const retained = new Set(state.messages.map(message => String(message.seq)));
+      state.imageRefs = Object.fromEntries(Object.entries(state.imageRefs).filter(([seq]) => retained.has(seq)));
+    }
     if (id) state.recentIds = [...state.recentIds, id].slice(-this.limit * 2);
     this.write(msg.key, state);
     return entry;
+  }
+
+  /** 仅取调用方已选出的当前会话消息附件；历史格式没有引用时不伪造。 */
+  attachments(key, seqs) {
+    const state = this.read(key), selected = new Set(seqs);
+    return state.messages.filter(message => !message.isSelf && selected.has(message.seq)).flatMap(message =>
+      (state.imageRefs?.[message.seq] || []).map(image => ({
+        item: { ...message, conversationSeq: message.seq }, image,
+      })));
   }
 
   snapshot(key, { throughSeq = Infinity, maxChars = 12000 } = {}) {

@@ -232,9 +232,17 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
     console.log('   （触发消息已由前一轮工具处理，跳过重复回合）');
     return;
   }
+  const snapshot = conversations?.snapshot(key, { throughSeq: last.conversationSeq ?? Infinity });
   let text = Waker.joinBatch(items);
-  const images = items.flatMap((i) => i.images || []).slice(0, 3);   // 一批最多喂 3 张，防炸请求体
-  const attachments = items.flatMap(item => (item.images || []).map(image => ({ item, image })));
+  const batchSeqs = new Set(items.map(item => item.conversationSeq));
+  // 未唤醒时收到的图也能在后续 @ 时补入；只取本轮快照展示的未读消息。
+  const cachedAttachments = conversations?.attachments(key,
+    (snapshot?.messages || []).filter(message => !batchSeqs.has(message.seq)).map(message => message.seq)) || [];
+  const attachments = [
+    ...cachedAttachments,
+    ...items.flatMap(item => (item.images || []).map(image => ({ item, image }))),
+  ].sort((a, b) => (a.item.conversationSeq ?? Infinity) - (b.item.conversationSeq ?? Infinity));
+  const images = attachments.slice(0, 3).map(attachment => attachment.image);
   if (attachments.length) {
     text += '\n【附件顺序】\n' + attachments.slice(0, 3).map(({ item, image }, i) =>
       `附件 ${i + 1}：${item.name || item.userId}（QQ ${item.userId}，消息序号 ${item.conversationSeq ?? '未知'}）${image.summary ? '；描述：' + image.summary : ''}`).join('\n');
@@ -245,7 +253,6 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
     ? '你在一个 QQ 群里。下面是群里刚连着说的几句话，最后一条是最新的。'
     : '你在跟 ' + last.name + ' 私聊。';
 
-  const snapshot = conversations?.snapshot(key, { throughSeq: last.conversationSeq ?? Infinity });
   let qq;
   if (cfg.engine === 'pi' && conversations) {
     const { createQQTools } = await import('./qq-tools.js');
