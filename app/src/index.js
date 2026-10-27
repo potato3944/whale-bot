@@ -23,7 +23,7 @@ import { Role, PRIVATE_RULES } from './role.js';
 import { Brain } from './brain.js';
 import { Humanizer } from './humanize.js';
 import { Waker } from './wake.js';
-import { MessageWindow } from './message-window.js';
+import { MessageWindow, GroupMessageWindow } from './message-window.js';
 import { OneBot } from './transport-onebot.js';
 import { Guard } from './guard.js';
 import { Proactive } from './proactive.js';
@@ -146,12 +146,15 @@ async function main() {
     batchWindowMs: cfg.wake.groupWindowMs,
   });
 
-  /** 每条新消息重置倒计时；群聊有硬上限，私聊没有。 */
-  const dispatch = (items) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg))
+  /** 群聊按发起人独立计时；处理回合仍全局串行。 */
+  const dispatch = (items, request) => turns.run(() => handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg, request))
     .catch((e) => console.error('[出错] ' + (e?.message || e)));
-  const groupWindow = new MessageWindow({
+  const groupWindow = new GroupMessageWindow({
     resetMs: cfg.wake.groupWindowMs,
     maxMs: cfg.wake.groupMaxWindowMs,
+    // 排队时群已读水位可能前进；保留入队时可见的附件，避免另一轮确认后丢图。
+    capture: msg => ({ attachments: conversations.attachments(msg.key,
+      conversations.snapshot(msg.key, { throughSeq: msg.conversationSeq }).messages.map(message => message.seq)) }),
     dispatch,
   });
   const privateWindow = new MessageWindow({
@@ -222,12 +225,16 @@ async function main() {
 }
 
 /** 处理一轮（可能是合并后的多条） */
-export async function handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg) {
+export async function handleTurn({ bot, brain, human, memory, waker, guard, conversations, socialMemory, relationships }, items, cfg, request = {}) {
   const last = items[items.length - 1];
-  // 群聊末条可能是旁观者的普通发言，身份归属使用最近的触发者。
-  const actor = items.findLast(item => item.triggered) || last;
+  const independentGroupRequest = last.isGroup && request.requesterId !== undefined;
+  // 请求身份固定为窗口发起人，其他人的 @ 不改变本轮回应对象。
+  const actor = (independentGroupRequest
+    ? items.findLast(item => item.triggered && String(item.userId) === request.requesterId)
+    : items.findLast(item => item.triggered)) || last;
   const key = last.key;
-  if (cfg.engine === 'pi' && last.conversationSeq !== undefined &&
+  // 群已读不等于其他发起人的请求已处理，独立请求必须各自执行。
+  if (!independentGroupRequest && cfg.engine === 'pi' && last.conversationSeq !== undefined &&
       last.conversationSeq <= conversations?.read(key).readThroughSeq) {
     console.log('   （触发消息已由前一轮工具处理，跳过重复回合）');
     return;
@@ -238,10 +245,17 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
   // 未唤醒时收到的图也能在后续 @ 时补入；只取本轮快照展示的未读消息。
   const cachedAttachments = conversations?.attachments(key,
     (snapshot?.messages || []).filter(message => !batchSeqs.has(message.seq)).map(message => message.seq)) || [];
+  const seenAttachments = new Set();
   const attachments = [
     ...cachedAttachments,
-    ...items.flatMap(item => (item.images || []).map(image => ({ item, image }))),
-  ].sort((a, b) => (a.item.conversationSeq ?? Infinity) - (b.item.conversationSeq ?? Infinity));
+    ...(request.attachments || []),
+    ...items.flatMap(item => (item.images || []).map((image, index) => ({ item, image, index }))),
+  ].filter(attachment => {
+    if (attachment.item.conversationSeq === undefined) return true;
+    const id = `${attachment.item.conversationSeq}:${attachment.index}`;
+    if (seenAttachments.has(id)) return false;
+    seenAttachments.add(id); return true;
+  }).sort((a, b) => (a.item.conversationSeq ?? Infinity) - (b.item.conversationSeq ?? Infinity));
   const images = attachments.slice(0, 3).map(attachment => attachment.image);
   if (attachments.length) {
     text += '\n【附件顺序】\n' + attachments.slice(0, 3).map(({ item, image }, i) =>
@@ -250,7 +264,8 @@ export async function handleTurn({ bot, brain, human, memory, waker, guard, conv
   }
 
   const situation = last.isGroup
-    ? '你在一个 QQ 群里。下面是群里刚连着说的几句话，最后一条是最新的。'
+    ? '你在一个 QQ 群里。下面是群里刚连着说的几句话，最后一条是最新的。' +
+      (independentGroupRequest ? `\n本轮回应对象：${actor.name || actor.userId}（QQ ${actor.userId}）。其他人的消息仅作群聊背景，他们的请求会单独排队处理，本轮不要代答。` : '')
     : '你在跟 ' + last.name + ' 私聊。';
 
   let qq;

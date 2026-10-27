@@ -67,8 +67,8 @@ export class ConversationState {
   attachments(key, seqs) {
     const state = this.read(key), selected = new Set(seqs);
     return state.messages.filter(message => !message.isSelf && selected.has(message.seq)).flatMap(message =>
-      (state.imageRefs?.[message.seq] || []).map(image => ({
-        item: { ...message, conversationSeq: message.seq }, image,
+      (state.imageRefs?.[message.seq] || []).map((image, index) => ({
+        item: { ...message, conversationSeq: message.seq }, image, index,
       })));
   }
 
