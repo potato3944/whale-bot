@@ -12,7 +12,8 @@
     "test": "node --test test/*.test.mjs",
     "diary": "node app/src/diary.js",
     "diary:auto": "node app/src/diary.js auto",
-    "search:check": "node scripts/check-search.mjs"
+    "search:check": "node scripts/check-search.mjs",
+    "sessions:group": "node scripts/view-group-sessions.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
