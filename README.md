@@ -29,7 +29,7 @@ cp app/role.example.md app/role.md
 
 私聊默认单独使用 `app/role.private.md`（对所有私聊对象温柔、自然、有一点俏皮），群聊继续使用 `roleCard` 指定的原卡。可通过 `privateRoleCard` 指定私聊卡路径；不配置时使用程序自带卡，主动私聊也采用该语气。固定回答规则同步区分私聊，避免原群聊卡的顶嘴、1~10字限制混入私聊。两张卡不叠加，不迁移历史或记忆；旧历史中的语气不是新私聊的人设要求。Docker 镜像包含默认私聊卡，修改它后需重建镜像；自定义文件需额外挂载。
 
-私聊卡根据本项目的小鲸鱼身份重写，侧重具体场景示例、温和的互动方式与自然的关系边界。编写时参考了 [自然一对一角色提示词的编写方法](https://github.com/Yuimi-chaya/llm-rp-role-prompt-authoring) 的设计讨论，没有导入其 Skill 或第三方恋爱角色卡。
+私聊卡参考 [大肥鱼配置包](https://github.com/zexuanw958-svg/dafeiyu-config-pack) 的简短分节与场景示例，围绕贪吃、摸鱼、嘴硬心软展开；保留私聊关系边界、事实准确性及现有工具限制，不接入对方的插件。日常通常一到三条短话，正事可以完整解释。来源与 MIT 声明见 `THIRD_PARTY_NOTICES.md`。
 
 希望采用 qq-bridge 作者的小鲸鱼人格时，可用 `cp app/role.qqbridge.md app/role.md` 替换示例角色卡。这份改编保留上游人格与语气，联网行为由运行时工具说明提供，移除了当前程序不支持的自主等待操作；没有加入管理员绝对服从、固定黏人或吃醋设定。来源和原始 MIT 声明见 `THIRD_PARTY_NOTICES.md`。
 
