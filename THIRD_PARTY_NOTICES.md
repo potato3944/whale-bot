@@ -2,10 +2,16 @@
 
 ## qq-bridge role card, QQ tool protocol and web tools
 
-`app/role.qqbridge.md` is adapted from `roles/小鲸鱼.md` in
+`app/role.md` and the original `app/role.qqbridge.md` are adapted from `roles/小鲸鱼.md` in
 https://github.com/Derpyu520/qq-bridge at commit `a49877f4e58d04e47532d44b803360d0f001160d`.
 `app/role.private.md` retains the whale identity from that card. Its current
 private-chat adaptation also draws on the dafeiyu persona credited below.
+Both active cards are organized into description, personality, scenario,
+greeting examples, dialogue examples and character notes following the field
+concepts documented at
+https://docs.sillytavern.app/usage/core-concepts/characterdesign/.
+This is a Markdown organization change, not SillyTavern card import or runtime
+integration; greetings and examples are illustrative prompt content.
 
 `app/src/qq-read-receipts.js` adapts `readThroughSeqV2` and
 `requestedReadThroughSeqV2` from `src/bridge.js` at the same commit.
