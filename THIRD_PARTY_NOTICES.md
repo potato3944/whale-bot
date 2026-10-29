@@ -90,6 +90,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## User-supplied Mingyue persona reference
+
+The user supplied the text of 《溟月·大肥鱼 角色卡 · 完整修订版》,
+attributed in the supplied page to AI角色卡工厂, Bilibili article `cv53299959`
+(2026-10-05). The layered personality, playful softness and praise-seeking
+behavior informed a locally rewritten portion of `app/role.private.md`.
+The source article is not bundled and no license for it is asserted here.
+The original name, relationship model, claimed model capabilities, forced
+periodic anchoring, and catchphrase quotas are not imported.
+
 ## QFace QQ face names
 
 `app/src/qq-faces.json` contains the ID/name fields from
