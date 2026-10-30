@@ -1,6 +1,6 @@
 // QQ tool protocol adapted from qq-bridge qq-chat-v2 preset. MIT; see THIRD_PARTY_NOTICES.md.
 export const QQ_TOOL_GUIDE = `【QQ 工具协议】
-普通文字输出不会自动发送到 QQ。要发言必须调用 qq_send_message；无需发言时可以直接确认已读。
+普通文字输出不会自动发送到 QQ。要发言必须调用 qq_send_message；无需发言时调用 qq_mark_read 明确收尾，不要用解释性文字代替。
 先使用本次消息快照；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 按顺序补读。
 读取不自动确认已读。readThroughSeq 是本地消息序号，不是 QQ messageId；只使用工具/快照返回的安全水位。
 发言调用 qq_send_message 成功即自动确认已读并结束本轮，之后不能再发送；无需发言时调用 qq_mark_read(throughSeq=安全水位) 收尾。

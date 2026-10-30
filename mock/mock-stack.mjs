@@ -224,8 +224,8 @@ function verdict() {
       c.messages?.some(m => JSON.stringify(m.content).includes('群里刚约好周末吃火锅')))],
     ['群聊实际发出回复', state.sentMessages.some(m => m.action === 'send_group_msg')],
     ['内部输出未转发且工具消息不重复', state.sentMessages.length === 4 && state.sentMessages.every(m => ['在呢', '说'].includes(m.message))],
-    ['模型实际执行已读工具', acknowledged],
-    ['显式收尾后省去额外模型请求', state.llmCalls.length === 6],
+    ['发送成功后自动确认已读', acknowledged],
+    ['两轮读取、发送共4次模型请求', state.llmCalls.length === 4],
   ];
   let pass = true;
   console.log('\n════════ 端到端结果 ════════');

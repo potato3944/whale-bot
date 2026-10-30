@@ -98,7 +98,8 @@ export class PiConversations {
     // the completed batch needs another provider request.
     const previousFinishTurn = session.agent.finishTurn;
     let endedByAcknowledgement = false;
-    let acknowledgedAssistant;
+    let terminalAssistant;
+    let reminded = false;
     session.agent.finishTurn = async (turn, signal) => {
       const previousDecision = await previousFinishTurn?.call(session.agent, turn, signal);
       const calls = turn.message.content.filter(block => block.type === 'toolCall');
@@ -115,8 +116,26 @@ export class PiConversations {
       if (qq?.closed && !qq.failed && !signal?.aborted &&
           turn.message.stopReason === 'toolUse' && (acknowledged || sentAndAutoAcked) && allSucceeded) {
         endedByAcknowledgement = true;
-        acknowledgedAssistant = turn.message;
+        terminalAssistant = turn.message;
         return { action: 'end' };
+      }
+      if (!qq || signal?.aborted || ['error', 'aborted'].includes(turn.message.stopReason)) return previousDecision;
+      // 提醒后的这次响应（含工具执行）就是最后一次，不再追加模型请求。
+      if (reminded) {
+        terminalAssistant = turn.message;
+        return { action: 'end' };
+      }
+      if (!qq.closed && !qq.failed && previousDecision?.action !== 'end' &&
+          turn.message.stopReason === 'stop' && calls.length === 0) {
+        reminded = true;
+        await session.sendCustomMessage({
+          customType: 'qq_completion_reminder', display: true,
+          content: '【程序收尾提醒】本轮尚未发送 QQ 消息，也未确认已读。普通文字不会发送到 QQ。' +
+            '需要发言请立即调用 qq_send_message；无需发言请调用 qq_mark_read，并使用已展示的安全水位。' +
+            '这是本轮唯一一次补充机会，请在这次响应内完成收尾，不要只输出说明。',
+        }, { deliverAs: 'steer' });
+        console.warn('   [QQ 收尾] 未发送或确认已读，提醒模型一次');
+        return { action: 'continue' };
       }
       return previousDecision;
     };
@@ -134,12 +153,15 @@ export class PiConversations {
       await session.prompt(prompt, { images });
       const last = session.messages.at(-1);
       if (timedOut) throw new Error('模型调用超时');
-      if (!endedByAcknowledgement && (last?.role !== 'assistant' || !['stop', 'length'].includes(last.stopReason))) {
+      if (qq && !qq.closed && !qq.failed && !['error', 'aborted'].includes(last?.stopReason)) {
+        throw new Error('QQ 回合未完成：模型未调用发送或已读工具，保留未读');
+      }
+      if (!terminalAssistant && (last?.role !== 'assistant' || !['stop', 'length'].includes(last.stopReason))) {
         throw new Error(last?.errorMessage || '模型没有完成本轮回复');
       }
       // A valid terminal tool batch ends with tool results, not a synthetic assistant message.
-      return { text: endedByAcknowledgement ? '' : session.getLastAssistantText() || '',
-        raw: acknowledgedAssistant || last, endedByAcknowledgement };
+      return { text: terminalAssistant ? '' : session.getLastAssistantText() || '',
+        raw: terminalAssistant || last, endedByAcknowledgement };
     } finally {
       clearTimeout(timer); unsubscribe(); session.agent.finishTurn = previousFinishTurn; session.dispose();
     }
